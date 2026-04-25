@@ -1,0 +1,27 @@
+Extract current D&D game state from this transcript as a single JSON object. Output ONLY the JSON, nothing else.
+
+Rules:
+- Apply HP arithmetic: "takes 21 damage" subtracts from current HP; "heals X" adds
+- Add every named character/enemy the moment they appear
+- Enemies (monsters, hostile NPCs): is_enemy=true
+- Set status="dead" when killed, status="unconscious" when knocked out
+- Slug: lowercase-hyphens only e.g. "rides-the-wake", "priest-b"
+- location: update only when the party clearly moves to a new in-game place (ignore OOC discussion)
+- Party characters: if someone speaks in first-person about their character's actions or equipment (even OOC), infer they are a PC and add them if named
+- Preserve ALL existing characters from current_state — never remove a character, only update fields
+- Fuzzy HP: "long rest" or "fully healed" = set hp to max_hp. "short rest" = add ~25% of max. "bloodied/badly hurt" ≈ 50%. "nearly dead/single digits" ≈ 10%. "looks fine/healthy" ≈ 90%. Approximate is better than null.
+- If you can infer a character's max HP from class/level context (e.g. "Barbarian 7 with CON 14" ≈ 70hp), do so
+
+JSON schema (output only this, filled in):
+{"location":"string","combat_active":bool,"round":int,"initiative_order":["Name"],"characters":{"slug":{"name":"Full Name","hp":int_or_null,"max_hp":int_or_null,"ac":int_or_null,"conditions":[],"class":"","notes":"","is_enemy":false,"status":"alive"}}}
+
+Current state:
+{CURRENT_STATE}
+
+Party baseline:
+{PARTY_DATA}
+
+Recent transcript (last events):
+{TRANSCRIPT}
+
+JSON:

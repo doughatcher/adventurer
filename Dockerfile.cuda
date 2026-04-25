@@ -1,0 +1,94 @@
+# syntax=docker/dockerfile:1.7
+#
+# adventurer-poc — CUDA build, NVIDIA-blessed base.
+#
+# Why a separate Dockerfile from the CPU/Vulkan one:
+# - NVIDIA's CUDA images bake in nvcc + CUDA libs at standard Ubuntu paths
+# - The runtime image's ld.so config + Vulkan/CUDA loader paths are pre-wired
+#   to work with NVIDIA Container Toolkit / CDI device passthrough — no
+#   LD_LIBRARY_PATH gymnastics needed
+# - Image is bigger (~3 GB) but GPU "just works" with --device nvidia.com/gpu=all
+#
+# Build:
+#   docker build -f Dockerfile.cuda -t adventurer:cuda .
+#
+# Run:
+#   docker run --rm --device nvidia.com/gpu=all \
+#       -v /var/home/me/repos/adventurer/models:/models:ro \
+#       adventurer:cuda \
+#       --model /models/gemma-4-E4B-it-Q4_K_M.gguf \
+#       --gpu-layers 99
+
+ARG CUDA_VERSION=12.6.0
+ARG UBUNTU_VERSION=24.04
+
+# ────────────── builder stage ──────────────
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} AS builder
+
+# Rust isn't in the CUDA image; install via rustup
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH \
+    DEBIAN_FRONTEND=noninteractive
+
+# Install build deps + rustup
+# libnccl-dev: llama.cpp 0.1.x auto-enables NCCL multi-GPU collectives when nvcc
+# is present; the dev image doesn't ship libnccl. Add it to satisfy the linker.
+# (Symbols are dead code for single-GPU runs, but must resolve.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        cmake \
+        build-essential \
+        pkg-config \
+        clang \
+        libclang-dev \
+        libomp-dev \
+        libnccl-dev=2.22.3-1+cuda12.6 \
+        git \
+        curl \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+       | sh -s -- -y --default-toolchain 1.95.0 --profile minimal \
+    && rustc --version
+
+# Make nvcc visible (CUDA images sometimes don't put it on PATH by default)
+ENV PATH=/usr/local/cuda/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+WORKDIR /work
+COPY Cargo.toml ./
+COPY src ./src
+COPY prompts ./prompts
+COPY samples ./samples
+
+# Default: cuda + cuda-no-vmm (the latter avoids "CUDA Virtual Memory Management
+# is not available" errors that some CDI passthrough configs hit)
+ARG CARGO_FEATURES=cuda,cuda-no-vmm
+
+# Explicitly link libnccl. The bundled llama.cpp (via llama-cpp-sys-2 0.1.145)
+# emits NCCL symbols unconditionally when CUDA is on, but its build.rs doesn't
+# emit `cargo:rustc-link-lib=nccl`, so the link fails without this RUSTFLAGS hack.
+ENV RUSTFLAGS="-C link-arg=-lnccl"
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/work/target,sharing=locked \
+    cargo build --release --features "$CARGO_FEATURES" && \
+    cp target/release/adventurer-poc /adventurer-poc
+
+# ────────────── runtime stage ──────────────
+FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+
+# libnccl2 is already in the cuda-runtime base image (held package).
+# Only need to add what's not already present.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgomp1 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /adventurer-poc /usr/local/bin/adventurer-poc
+COPY prompts /work/prompts
+COPY samples /work/samples
+WORKDIR /work
+
+ENTRYPOINT ["adventurer-poc"]
+CMD ["--help"]

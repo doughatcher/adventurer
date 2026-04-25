@@ -1,0 +1,8 @@
+/target
+/Cargo.lock
+*.gguf
+.env
+.env.*
+!.env.example
+*.pem
+*.key
