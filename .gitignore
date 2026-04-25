@@ -1,6 +1,8 @@
 /target
 /Cargo.lock
+/models/        # GGUF (LLM) + GGML (whisper) weights — not committed
 *.gguf
+*.ggml
 .env
 .env.*
 !.env.example

@@ -77,28 +77,33 @@ ARG CARGO_FEATURES=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target,sharing=locked \
     if [ -n "$CARGO_FEATURES" ]; then \
-        cargo build --release --features "$CARGO_FEATURES"; \
+        cargo build --release --bins --features "$CARGO_FEATURES"; \
     else \
-        cargo build --release; \
+        cargo build --release --bins; \
     fi && \
-    cp target/release/adventurer-poc /adventurer-poc
+    cp target/release/adventurer-poc     /adventurer-poc && \
+    cp target/release/adventurer-stt-poc /adventurer-stt-poc
 
 # ────────────── runtime stage ──────────────
 FROM debian:bookworm-slim AS runtime
 
 # libgomp1   — OpenMP runtime for CPU inference
 # libvulkan1 — Vulkan loader (the GPU ICD comes from the host via NVIDIA CDI)
-# ca-certificates — for the --ollama HTTP path
+# ffmpeg     — lazy audio decode for adventurer-stt-poc
+# ca-certificates — for the --ollama / --speaches HTTP paths
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
         libvulkan1 \
+        ffmpeg \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /adventurer-poc /usr/local/bin/adventurer-poc
+COPY --from=builder /adventurer-poc     /usr/local/bin/adventurer-poc
+COPY --from=builder /adventurer-stt-poc /usr/local/bin/adventurer-stt-poc
 COPY prompts /work/prompts
 COPY samples /work/samples
 WORKDIR /work
 
-ENTRYPOINT ["adventurer-poc"]
-CMD ["--help"]
+# No ENTRYPOINT — multi-binary image. Default CMD shows help for the LLM PoC.
+# Override with `docker run image adventurer-stt-poc --audio ...`
+CMD ["adventurer-poc", "--help"]

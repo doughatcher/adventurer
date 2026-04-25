@@ -12,12 +12,20 @@
 # Build:
 #   docker build -f Dockerfile.cuda -t adventurer:cuda .
 #
-# Run:
+# Run (LLM PoC):
 #   docker run --rm --device nvidia.com/gpu=all \
 #       -v /var/home/me/repos/adventurer/models:/models:ro \
-#       adventurer:cuda \
+#       adventurer:cuda adventurer-poc \
 #       --model /models/gemma-4-E4B-it-Q4_K_M.gguf \
 #       --gpu-layers 99
+#
+# Run (STT PoC — needs ffmpeg in the image):
+#   docker run --rm --device nvidia.com/gpu=all \
+#       -v /var/home/me/repos/adventurer/models:/models:ro \
+#       -v /var/home/me/repos/adventurer/samples:/work/samples:ro \
+#       adventurer:cuda adventurer-stt-poc \
+#       --model /models/ggml-medium.bin \
+#       --audio /work/samples/audio/clip.mp3
 
 ARG CUDA_VERSION=12.6.0
 ARG UBUNTU_VERSION=24.04
@@ -72,23 +80,28 @@ ENV RUSTFLAGS="-C link-arg=-lnccl"
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target,sharing=locked \
-    cargo build --release --features "$CARGO_FEATURES" && \
-    cp target/release/adventurer-poc /adventurer-poc
+    cargo build --release --bins --features "$CARGO_FEATURES" && \
+    cp target/release/adventurer-poc     /adventurer-poc && \
+    cp target/release/adventurer-stt-poc /adventurer-stt-poc
 
 # ────────────── runtime stage ──────────────
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
 
 # libnccl2 is already in the cuda-runtime base image (held package).
-# Only need to add what's not already present.
+# ffmpeg: lazy audio decode for adventurer-stt-poc — webm/mp3/wav → 16 kHz f32 PCM.
+# (The eventual production binary will use `symphonia` for pure-Rust decoding.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
+        ffmpeg \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /adventurer-poc /usr/local/bin/adventurer-poc
+COPY --from=builder /adventurer-poc     /usr/local/bin/adventurer-poc
+COPY --from=builder /adventurer-stt-poc /usr/local/bin/adventurer-stt-poc
 COPY prompts /work/prompts
 COPY samples /work/samples
 WORKDIR /work
 
-ENTRYPOINT ["adventurer-poc"]
-CMD ["--help"]
+# No ENTRYPOINT — multi-binary image. Default CMD shows help for the LLM PoC.
+# Override with `docker run image adventurer-stt-poc --audio ...`
+CMD ["adventurer-poc", "--help"]
