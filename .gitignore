@@ -1,8 +1,12 @@
 /target
 /Cargo.lock
-/models/        # GGUF (LLM) + GGML (whisper) weights — not committed
+# Model weights live in /models/ — gitignored entirely (LLM + STT files,
+# multi-GB each). The leading slash anchors to the repo root; trailing slash
+# matches the directory.
+/models/
 *.gguf
 *.ggml
+*.bin
 .env
 .env.*
 !.env.example

@@ -66,23 +66,25 @@ RUN curl -fL "https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/$
 
 WORKDIR /work
 COPY Cargo.toml ./
-COPY src ./src
+COPY crates ./crates
 COPY prompts ./prompts
 COPY samples ./samples
 
 ARG CARGO_FEATURES=""
 
 # BuildKit cache mounts keep cargo registry + target/ warm across rebuilds.
-# Final binary is `cp`'d out so it survives the cache mount unmount.
+# Workspace build: explicit -p per crate so each gets `--features` propagated.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target,sharing=locked \
-    if [ -n "$CARGO_FEATURES" ]; then \
-        cargo build --release --bins --features "$CARGO_FEATURES"; \
-    else \
-        cargo build --release --bins; \
-    fi && \
-    cp target/release/adventurer-poc     /adventurer-poc && \
-    cp target/release/adventurer-stt-poc /adventurer-stt-poc
+    set -eux; \
+    feat_arg=""; \
+    if [ -n "$CARGO_FEATURES" ]; then feat_arg="--features $CARGO_FEATURES"; fi; \
+    cargo build --release -p adventurer-server; \
+    cargo build --release -p adventurer-llm-bench  $feat_arg; \
+    cargo build --release -p adventurer-stt-bench  $feat_arg; \
+    cp target/release/adventurer            /adventurer; \
+    cp target/release/adventurer-llm-bench  /adventurer-llm-bench; \
+    cp target/release/adventurer-stt-bench  /adventurer-stt-bench
 
 # ────────────── runtime stage ──────────────
 FROM debian:bookworm-slim AS runtime
@@ -98,12 +100,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /adventurer-poc     /usr/local/bin/adventurer-poc
-COPY --from=builder /adventurer-stt-poc /usr/local/bin/adventurer-stt-poc
+COPY --from=builder /adventurer            /usr/local/bin/adventurer
+COPY --from=builder /adventurer-llm-bench  /usr/local/bin/adventurer-llm-bench
+COPY --from=builder /adventurer-stt-bench  /usr/local/bin/adventurer-stt-bench
 COPY prompts /work/prompts
 COPY samples /work/samples
 WORKDIR /work
 
-# No ENTRYPOINT — multi-binary image. Default CMD shows help for the LLM PoC.
-# Override with `docker run image adventurer-stt-poc --audio ...`
-CMD ["adventurer-poc", "--help"]
+EXPOSE 3200
+
+# Default CMD launches the actual server. Override with one of:
+#   docker run image adventurer-llm-bench --model …
+#   docker run image adventurer-stt-bench --audio …
+CMD ["adventurer"]

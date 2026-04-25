@@ -1,0 +1,24 @@
+[package]
+name        = "adventurer-inference-stt"
+description = "In-process STT (whisper.cpp) inference engine — links whisper-rs-sys only, no llama"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+whisper-rs = { workspace = true }
+anyhow     = { workspace = true }
+tracing    = { workspace = true }
+
+[features]
+default = []
+# GPU backends. Kept here (vs the workspace) for the same reason as the LLM
+# crate — each engine compiles into its own binary, no shared link table.
+cuda    = ["whisper-rs/cuda"]
+vulkan  = ["whisper-rs/vulkan"]
+metal   = ["whisper-rs/metal"]

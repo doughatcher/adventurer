@@ -65,24 +65,36 @@ ENV PATH=/usr/local/cuda/bin:$PATH \
 
 WORKDIR /work
 COPY Cargo.toml ./
-COPY src ./src
+COPY crates ./crates
 COPY prompts ./prompts
 COPY samples ./samples
 
-# Default: cuda + cuda-no-vmm (the latter avoids "CUDA Virtual Memory Management
-# is not available" errors that some CDI passthrough configs hit)
-ARG CARGO_FEATURES=cuda,cuda-no-vmm
+# Default GPU feature: cuda. (The inference crate's `cuda` feature already pulls
+# `cuda-no-vmm` to avoid "CUDA Virtual Memory Management is not available"
+# errors under some CDI passthrough configs.)
+ARG CARGO_FEATURES=cuda
 
-# Explicitly link libnccl. The bundled llama.cpp (via llama-cpp-sys-2 0.1.145)
-# emits NCCL symbols unconditionally when CUDA is on, but its build.rs doesn't
-# emit `cargo:rustc-link-lib=nccl`, so the link fails without this RUSTFLAGS hack.
+# `-lnccl` — llama-cpp-sys-2 0.1.145 unconditionally emits NCCL symbols when
+# CUDA is on, but its build.rs doesn't emit `cargo:rustc-link-lib=nccl`.
+#
+# Note: we deliberately do NOT link both llama-cpp-sys-2 AND whisper-rs-sys into
+# the same binary — they each vendor their own ggml and the duplicate symbols
+# silently produce a runtime-crashing binary. The architecture instead splits
+# inference across worker processes (see crates/inference-{llm,stt}).
 ENV RUSTFLAGS="-C link-arg=-lnccl"
 
+# Workspace build: explicit -p per crate. Cargo doesn't allow --features with
+# --workspace; the bench crates carry GPU features and the server doesn't.
+# (Server links neither llama nor whisper — see crates/server/Cargo.toml.)
+# Cargo cache mount shares C++ artifacts across the bench builds.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/work/target,sharing=locked \
-    cargo build --release --bins --features "$CARGO_FEATURES" && \
-    cp target/release/adventurer-poc     /adventurer-poc && \
-    cp target/release/adventurer-stt-poc /adventurer-stt-poc
+    cargo build --release -p adventurer-server && \
+    cargo build --release -p adventurer-llm-bench  --features "$CARGO_FEATURES" && \
+    cargo build --release -p adventurer-stt-bench  --features "$CARGO_FEATURES" && \
+    cp target/release/adventurer            /adventurer && \
+    cp target/release/adventurer-llm-bench  /adventurer-llm-bench && \
+    cp target/release/adventurer-stt-bench  /adventurer-stt-bench
 
 # ────────────── runtime stage ──────────────
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} AS runtime
@@ -96,12 +108,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /adventurer-poc     /usr/local/bin/adventurer-poc
-COPY --from=builder /adventurer-stt-poc /usr/local/bin/adventurer-stt-poc
+COPY --from=builder /adventurer            /usr/local/bin/adventurer
+COPY --from=builder /adventurer-llm-bench  /usr/local/bin/adventurer-llm-bench
+COPY --from=builder /adventurer-stt-bench  /usr/local/bin/adventurer-stt-bench
 COPY prompts /work/prompts
 COPY samples /work/samples
 WORKDIR /work
 
-# No ENTRYPOINT — multi-binary image. Default CMD shows help for the LLM PoC.
-# Override with `docker run image adventurer-stt-poc --audio ...`
-CMD ["adventurer-poc", "--help"]
+# Default CMD launches the actual server. Override with one of:
+#   docker run image adventurer-llm-bench --model …
+#   docker run image adventurer-stt-bench --audio …
+CMD ["adventurer"]

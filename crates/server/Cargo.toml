@@ -1,0 +1,34 @@
+[package]
+name        = "adventurer-server"
+description = "Adventurer — single-binary live D&D session companion (axum + worker-process inference)"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+
+[[bin]]
+name = "adventurer"
+path = "src/main.rs"
+
+# Server intentionally has no inference deps. It spawns adventurer-llm-bench
+# and adventurer-stt-bench (in --worker mode, Day 2) as long-running children
+# and talks to them via stdin/stdout JSON. Keeps the server's link table free
+# of llama.cpp / whisper.cpp / ggml conflicts.
+[dependencies]
+axum       = { version = "0.7", features = ["ws", "multipart", "macros"] }
+tower      = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+
+clap       = { workspace = true }
+anyhow     = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+tokio      = { workspace = true }
+reqwest    = { workspace = true }
+tracing    = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# No GPU features — server doesn't link inference. Workers carry the GPU bits.
+[features]
+default = []

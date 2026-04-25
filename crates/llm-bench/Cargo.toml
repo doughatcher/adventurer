@@ -1,0 +1,29 @@
+[package]
+name        = "adventurer-llm-bench"
+description = "Bench: in-process LLM (gemma4 etc.) state-extraction A/B against Ollama"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+
+[[bin]]
+name = "adventurer-llm-bench"
+path = "src/main.rs"
+
+[dependencies]
+adventurer-inference-llm = { path = "../inference-llm" }
+clap       = { workspace = true }
+anyhow     = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+reqwest    = { workspace = true }
+tokio      = { workspace = true }
+tracing    = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+default = []
+cuda        = ["adventurer-inference-llm/cuda-no-vmm"]
+vulkan      = ["adventurer-inference-llm/vulkan"]
+metal       = ["adventurer-inference-llm/metal"]

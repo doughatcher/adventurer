@@ -216,27 +216,34 @@ Both inference paths are now validated. The unfinished items:
 5. **Pin CUDA arch** — drop build time from 10+ min to ~2 min by targeting only sm_89.
 6. **The actual port** — `axum` server replacing `server/main.py`, embedded inference (LLM + STT) replacing the Ollama + Speaches HTTP calls, `notify` replacing `watchfiles`, `git2` replacing the `git`/`gh` subprocess shellouts.
 
-## Layout
+## Layout (Cargo workspace)
 
 ```
 adventurer/
-├── Cargo.toml               (two [[bin]] entries — adventurer-poc, adventurer-stt-poc)
-├── Dockerfile               (CPU + Vulkan via build arg)
-├── Dockerfile.cuda          (CUDA — separate base image, builds both bins)
-├── .dockerignore
-├── README.md                (this file)
+├── Cargo.toml                       (workspace root + workspace.dependencies)
+├── Dockerfile                       (CPU + Vulkan via build arg)
+├── Dockerfile.cuda                  (CUDA — separate base image, builds 3 bins)
+├── README.md                        (this file)
+├── crates/
+│   ├── inference-llm/               (lib: llama.cpp engine — links llama-cpp-sys-2 only)
+│   ├── inference-stt/               (lib: whisper.cpp engine — links whisper-rs-sys only)
+│   ├── server/                      (bin: adventurer — axum, no inference deps)
+│   ├── llm-bench/                   (bin: adventurer-llm-bench — Ollama A/B)
+│   └── stt-bench/                   (bin: adventurer-stt-bench — Speaches A/B)
 ├── prompts/
-│   └── state.txt            (verbatim STATE_PROMPT from dnd-stage/server/gemma.py)
+│   └── state.txt                    (verbatim STATE_PROMPT from dnd-stage/server/gemma.py)
 ├── samples/
-│   ├── party.md             (3 PCs with HP/AC/class — sample party fixture)
-│   ├── transcript.md        (combat encounter — captain + 2 worgs)
-│   └── audio/
-│       └── clip.mp3         (30s slice from a real archived dnd-stage session)
-├── models/                  (gitignored — Gemma 4 GGUFs + ggml-medium.bin live here)
-├── scripts/
-│   └── run.sh               (wrapper: picks image + GPU flags + host network)
-└── src/
-    ├── main.rs              (LLM PoC: llama-cpp-2 + Ollama A/B + JSON validator)
-    └── bin/
-        └── stt_poc.rs       (STT PoC: whisper-rs + Speaches A/B + transcript validator)
+│   ├── party.md                     (3 PCs with HP/AC/class)
+│   ├── transcript.md                (combat encounter fixture)
+│   └── audio/clip.mp3               (30s slice from a real archived dnd-stage session)
+├── models/                          (gitignored — Gemma 4 GGUFs + ggml-medium.bin)
+└── scripts/
+    └── run.sh                       (Docker wrapper: picks image + GPU + host network)
 ```
+
+**Why two inference crates and not one:** llama.cpp and whisper.cpp each vendor
+their own static copy of `ggml`. Linking both into the same binary produces
+~hundreds of duplicate `ggml_backend_*` symbols and `--allow-multiple-definition`
+silently picks one and crashes the other at runtime. The architecture instead
+splits inference across separate worker processes; the server spawns them and
+talks via stdin/stdout (Day 2).

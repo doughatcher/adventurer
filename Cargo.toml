@@ -1,41 +1,47 @@
-[package]
-name = "adventurer"
+[workspace]
+resolver = "2"
+members = [
+    # Inference engines — split into two crates because llama.cpp and whisper.cpp
+    # each vendor their own ggml; linking both into one binary produces a
+    # runtime-crashing executable. The server runs them as separate worker
+    # processes and talks to them via stdin/stdout JSON.
+    "crates/inference-llm",
+    "crates/inference-stt",
+    "crates/server",
+    "crates/llm-bench",
+    "crates/stt-bench",
+]
+default-members = [
+    # Building the workspace by default builds the server (the actual product).
+    # Benches are opt-in via `cargo build -p adventurer-llm-bench` etc.
+    "crates/server",
+]
+
+[workspace.package]
 version = "0.0.1"
 edition = "2021"
-description = "Proofs-of-concept for the in-process LLM + STT inference path that will replace dnd-stage's Ollama + Speaches HTTP services"
 license = "MIT"
+authors = ["Doug Hatcher <doug@hatcher.ltd>"]
+repository = "https://github.com/doughatcher/adventurer"
 
-# adventurer-poc:     LLM state-extraction PoC (replaces Ollama HTTP path)
-# adventurer-stt-poc: Whisper STT PoC          (replaces Speaches HTTP path)
-[[bin]]
-name = "adventurer-poc"
-path = "src/main.rs"
-
-[[bin]]
-name = "adventurer-stt-poc"
-path = "src/bin/stt_poc.rs"
-
-[dependencies]
+[workspace.dependencies]
+# Inference engines (heavy native deps — keep on workspace level for version sync)
 llama-cpp-2 = { version = "0.1.145", default-features = false, features = ["openmp"] }
 whisper-rs  = { version = "0.16",    default-features = false, features = ["openmp"] }
-clap = { version = "4", features = ["derive"] }
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "process", "fs"] }
 
-[features]
-default = []
-# Enable CUDA support across both LLM and STT (requires CUDA toolkit + nvcc on the build host)
-cuda = ["llama-cpp-2/cuda", "whisper-rs/cuda"]
-# CUDA without Virtual Memory Management — needed when running CUDA inside containers
-# where VMM may not be available (e.g. some CDI passthrough setups).
-cuda-no-vmm = ["llama-cpp-2/cuda-no-vmm"]
-# Enable Vulkan support (more portable than CUDA, slower)
-vulkan = ["llama-cpp-2/vulkan", "whisper-rs/vulkan"]
-# macOS only
-metal = ["llama-cpp-2/metal", "whisper-rs/metal"]
+# Async + HTTP
+tokio   = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "process", "fs", "sync", "signal"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+
+# Serialization
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# CLI + errors + logging
+clap   = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 lto = "thin"

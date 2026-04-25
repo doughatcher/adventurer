@@ -1,0 +1,25 @@
+[package]
+name        = "adventurer-inference-llm"
+description = "In-process LLM (llama.cpp) inference engine — links llama-cpp-sys-2 only, no whisper"
+version.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+authors.workspace     = true
+repository.workspace  = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+llama-cpp-2 = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+
+[features]
+default = []
+# GPU backends. Kept in this crate (vs the workspace) because the LLM and STT
+# engines each have their own features and they're built into separate binaries.
+cuda        = ["llama-cpp-2/cuda"]
+cuda-no-vmm = ["cuda", "llama-cpp-2/cuda-no-vmm"]
+vulkan      = ["llama-cpp-2/vulkan"]
+metal       = ["llama-cpp-2/metal"]
