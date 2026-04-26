@@ -12,6 +12,15 @@
 
 set -euo pipefail
 
+# Source ~/.env so GITHUB_TOKEN / ADVENTURER_* vars are available when Steam
+# launches us in a clean environment without the user's shell rc files.
+if [[ -f "${HOME}/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "${HOME}/.env"
+    set +a
+fi
+
 IMAGE="${ADVENTURER_IMAGE:-adventurer:cuda}"
 NAME="${ADVENTURER_CONTAINER:-adventurer-live}"
 PORT="${ADVENTURER_PORT:-3200}"
@@ -39,11 +48,24 @@ trap cleanup EXIT INT TERM
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 
 # ─── 2. start the container ───
+# Pass GitHub credentials through if set in the user's env so /api/session/save
+# works without UI re-config on every launch.
+GH_ENV_FLAGS=()
+[[ -n "${GITHUB_TOKEN:-}" ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_PAT=${GITHUB_TOKEN}")
+[[ -n "${ADVENTURER_GITHUB_PAT:-}"    ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_PAT=${ADVENTURER_GITHUB_PAT}")
+[[ -n "${ADVENTURER_GITHUB_REPO:-}"   ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_REPO=${ADVENTURER_GITHUB_REPO}")
+[[ -n "${ADVENTURER_GITHUB_BRANCH:-}" ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_BRANCH=${ADVENTURER_GITHUB_BRANCH}")
+# Sensible default: point at adventure-log if user hasn't set anything else.
+if [[ -z "${ADVENTURER_GITHUB_REPO:-}" ]]; then
+    GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_REPO=doughatcher/adventure-log")
+fi
+
 log "starting ${IMAGE} (lan=${LAN_IP}, port=${PORT})"
 docker run -d --name "${NAME}" \
     --device nvidia.com/gpu=all \
     -p "${PORT}:3200" \
     -e "ADVENTURER_LAN_IP=${LAN_IP}" \
+    "${GH_ENV_FLAGS[@]}" \
     -v "${MODELS}:/models:ro" \
     -v "${SESSION}:/work/session" \
     "${IMAGE}" >> "$LOGFILE"
