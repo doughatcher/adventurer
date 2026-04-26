@@ -1,9 +1,18 @@
 # Release builds — fired on tag push (`git tag v0.0.1 && git push --tags`).
 #
-# Two-platform matrix: linux-x86_64 (definite) and windows-x86_64 (best-effort).
-# Both build CPU-only — GPU backends (CUDA / Vulkan / Metal) need toolchains
-# that aren't present on standard GitHub-hosted runners. Once we have a self-
-# hosted runner with NVIDIA drivers we can add a cuda matrix entry.
+# Four-platform matrix:
+#   linux-x86_64      — ubuntu-latest, definite
+#   windows-x86_64    — windows-latest, best-effort
+#   macos-aarch64     — macos-latest (Apple Silicon, M-series), definite
+#   macos-x86_64      — macos-13 (last Intel runner), best-effort
+#
+# All builds are CPU-only — GPU backends (CUDA / Vulkan / Metal) need
+# toolchains that aren't always present on standard GitHub-hosted
+# runners, and Metal support in our llama.cpp wrapper isn't wired yet
+# anyway. Apple Silicon CPU is fast enough that gemma-4-E4B at Q4_K_M
+# is usable without Metal — full Metal acceleration is a post-v0.x.
+# Once we have a self-hosted runner with NVIDIA drivers we can add a
+# cuda matrix entry alongside.
 #
 # Each platform produces an archive containing:
 #
@@ -61,6 +70,21 @@ jobs:
             archive_ext: zip
             exe_ext: ".exe"
             allow-fail: true   # MSVC + cmake on windows-latest is sometimes flaky
+          # macos-latest = Apple Silicon (M-series, arm64). What most
+          # current Macs are. Native binary, no Rosetta.
+          - os: macos-latest
+            target: macos-aarch64
+            archive_ext: tar.gz
+            exe_ext: ""
+            allow-fail: false
+          # macos-13 is the last Intel x86_64 runner GitHub provides.
+          # Best-effort because (a) Intel Macs are a shrinking population
+          # and (b) the runner image is older and may lag updates.
+          - os: macos-13
+            target: macos-x86_64
+            archive_ext: tar.gz
+            exe_ext: ""
+            allow-fail: true
 
     steps:
       - uses: actions/checkout@v4
@@ -96,6 +120,16 @@ jobs:
           cl 2>&1 | Select-Object -First 1
         shell: pwsh
 
+      # macOS runners ship cmake + clang (Apple's vendored toolchain) so
+      # there's nothing to install. We just verify they're present so a
+      # silent runner-image change is loud rather than silent.
+      - name: confirm build deps (macos)
+        if: runner.os == 'macOS'
+        run: |
+          cmake --version | head -1
+          clang --version | head -1
+          uname -m
+
       - name: build server + workers (CPU release)
         run: |
           cargo build --release -p adventurer-server
@@ -103,7 +137,7 @@ jobs:
           cargo build --release -p adventurer-stt-bench
 
       - name: smoke-test the server binary (--no-workers)
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         run: |
           ./target/release/adventurer --help
           # Quick sanity boot: --no-workers means just /health, no inference,
@@ -121,8 +155,11 @@ jobs:
           kill $SERVER_PID 2>/dev/null || true
 
       # ─── package ──────────────────────────────────────────────────────
-      - name: stage release dir (linux)
-        if: runner.os == 'Linux'
+      # Linux + macOS share a POSIX shell + tar, so they use the same step.
+      # The launch.sh launcher only ships in Linux + macOS archives because
+      # it's a bash script — Windows users get a docs pointer in the README.
+      - name: stage release dir (unix)
+        if: runner.os != 'Windows'
         run: |
           DIR="adventurer-${{ github.ref_name }}-${{ matrix.target }}"
           mkdir -p "$DIR"
@@ -191,7 +228,14 @@ jobs:
           body: |
             adventurer ${{ github.ref_name }}
 
-            Pre-release CPU-only build for Linux x86_64 and Windows x86_64.
+            Pre-release CPU-only build. Four-platform matrix:
+            - **linux-x86_64** (Ubuntu) — `.tar.gz`
+            - **macos-aarch64** (Apple Silicon, M-series) — `.tar.gz`
+            - **macos-x86_64** (Intel Mac) — `.tar.gz`
+            - **windows-x86_64** — `.zip`
+
+            macos-x86_64 and windows-x86_64 are best-effort; if a runner
+            image breaks them, the Linux + Apple Silicon builds still ship.
 
             ## Contents (per archive)
             - `adventurer{,.exe}` — server (axum + WebSocket, port 3210)
@@ -199,7 +243,7 @@ jobs:
             - `adventurer-stt-bench{,.exe}` — STT worker (run with `--worker`)
             - `assets/` — DM stage + player UI (also embedded in the server)
             - `prompts/state.txt` — LLM state-extraction prompt
-            - `launch.sh` — reference launcher (Linux only)
+            - `launch.sh` — reference launcher (Linux + macOS only)
 
             ## Not included (you supply)
             - LLM model — `gemma-4-E4B-it-Q4_K_M.gguf` (~3 GB)
@@ -207,3 +251,8 @@ jobs:
 
             See README for setup details. Models will ship via Steamworks
             depot once we hit early access.
+
+            ## GPU acceleration
+            All current binaries are CPU-only — the gemma 4 E4B model at
+            Q4_K_M runs fine on modern CPUs (Apple Silicon especially).
+            CUDA / Metal / Vulkan binary variants are post-v0.1.
