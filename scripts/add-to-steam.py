@@ -119,11 +119,18 @@ def main() -> int:
         data = {"shortcuts": {}}
 
     shortcuts = data.setdefault("shortcuts", {})
-    # Remove any existing entry with the same name (idempotent re-runs).
+    # Idempotent re-runs: drop any existing entry that matches by NAME OR by
+    # EXE path. Means renaming via `--name X` cleanly replaces the prior
+    # "Adventure Log" entry pointing at the same launcher.
+    quoted_exe = f'"{exe}"'
     keep = []
     for k, v in shortcuts.items():
-        if (v.get("AppName") or v.get("appname")) != args.name:
-            keep.append(v)
+        existing_name = v.get("AppName") or v.get("appname") or ""
+        existing_exe  = v.get("Exe")     or v.get("exe")     or ""
+        if existing_name == args.name or existing_exe == quoted_exe:
+            print(f"  removing existing entry: name={existing_name!r} exe={existing_exe!r}")
+            continue
+        keep.append(v)
     shortcuts.clear()
 
     new_entry = make_entry(args.name, exe, start_dir, args.icon)
