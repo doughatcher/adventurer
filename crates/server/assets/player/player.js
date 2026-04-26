@@ -466,25 +466,40 @@
       micLog({ type: 'mic_recorder_error', err: String(e && e.error || e) });
     };
     recorder.onstop = async () => {
-      // Snapshot the slice peak *before* starting the next slice (which would
-      // reset it). VAD gate: if the peak never crossed threshold, skip the
-      // upload entirely. Whisper would just hallucinate on it.
+      // CRITICAL: snapshot the slice's data INTO LOCALS, then start the
+      // next slice IMMEDIATELY, then process the upload in parallel with
+      // the new slice's capture.
+      //
+      // Previous code awaited onChunk() BEFORE recursing — which blocked
+      // the next recorder.start() for the entire upload duration (1-5 s
+      // per slice). During that window the mic stream was still producing
+      // audio but no MediaRecorder was consuming it, so the audio was
+      // silently dropped. Result: gaps in the transcript and whole
+      // sentences missing. The "no audio gap" claim in startRecording's
+      // comment was wrong — this is the fix.
       const slicePeak = vadPeak;
-      if (blob) {
+      const sliceBlob = blob;
+      const sliceSeq  = chunksSeen + 1;
+      if (isRecording) recordOneSlice();   // start next slice FIRST (~50-100ms gap)
+      if (sliceBlob) {
         if (analyser && slicePeak < VAD_THRESHOLD) {
           chunksSkipped++;
           micLog({
             type: 'mic_chunk_skipped_vad',
-            n: chunksSeen + 1,
-            bytes: blob.size,
+            n: sliceSeq,
+            bytes: sliceBlob.size,
             peak: +slicePeak.toFixed(4),
             threshold: VAD_THRESHOLD,
           });
         } else {
-          await onChunk({ data: blob, peak: slicePeak });
+          // Upload happens IN PARALLEL with the new slice's capture.
+          // Slices may arrive on the server slightly out of order if one
+          // upload is slower than the next; the server-side timestamp
+          // (chrono::Local::now() in post_voice) is when the chunk was
+          // RECEIVED, not when it was recorded — fine for live captions.
+          onChunk({ data: sliceBlob, peak: slicePeak });
         }
       }
-      if (isRecording) recordOneSlice();   // immediately start next slice
     };
     recorder.start();
     // Stop after SLICE_MS — guarded against the recorder dying early.
