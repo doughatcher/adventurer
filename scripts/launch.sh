@@ -60,7 +60,9 @@ NAME="${ADVENTURER_CONTAINER:-adventurer-live}"
 PORT="${ADVENTURER_PORT:-3210}"
 MODELS="${ADVENTURER_MODELS:-/var/home/me/repos/adventurer/models}"
 SESSION="${ADVENTURER_SESSION:-${HOME}/.local/share/adventurer/session}"
-mkdir -p "$SESSION"
+# Unique Chrome profile dir, defined early so the cleanup trap can pkill by it.
+CHROME_PROFILE="${HOME}/.cache/adventurer/chrome-profile"
+mkdir -p "$SESSION" "$CHROME_PROFILE"
 
 # Confirm the image exists locally — Steam-launched processes can't pull from
 # a registry without auth or network setup, so a missing image is fatal.
@@ -82,10 +84,18 @@ LAN_IP="${LAN_IP:-127.0.0.1}"
 echo "  LAN_IP=$LAN_IP  PORT=$PORT  IMAGE=$IMAGE  SESSION=$SESSION"
 
 cleanup() {
-    echo "[$(date '+%H:%M:%S')] cleanup: stopping container ${NAME}"
-    # -t 2 → fast SIGTERM → SIGKILL after 2s so "Stop game" feels responsive
-    # rather than waiting docker's default 10s graceful timeout.
-    docker stop -t 2 "${NAME}" >/dev/null 2>&1 || true
+    echo "[$(date '+%H:%M:%S')] cleanup: SIGKILL container + kill Chrome window"
+    # 1. Kill the Chrome window we opened, matched by our unique --user-data-dir
+    #    (Steam's "Exiting Game..." overlay waits for the entire process tree
+    #    so we have to take Chrome down too — otherwise the launcher exits but
+    #    Chrome lingers and Steam keeps showing "Exiting Game...".)
+    pkill -f -- "--user-data-dir=${CHROME_PROFILE:-/dev/null/no-match}" 2>/dev/null || true
+    # 2. SIGKILL the container — we don't need graceful flush; session state
+    #    is broadcast live and (if configured) already pushed to GitHub.
+    #    docker kill is instant; docker stop -t 2 was a 2-second hold.
+    docker kill "${NAME}" 2>/dev/null || true
+    docker rm -f  "${NAME}" >/dev/null 2>&1 || true
+    echo "[$(date '+%H:%M:%S')] cleanup done"
 }
 trap cleanup EXIT INT TERM
 
@@ -153,9 +163,32 @@ echo "[$(date '+%H:%M:%S')] opening browser → ${URL}"
 # instead of attaching to an existing Chrome and detaching us instantly. This
 # was the original "exits immediately" bug — flatpak Chrome with no
 # --user-data-dir reuses the running session and our `wait` returned at once.
-CHROME_PROFILE="${HOME}/.cache/adventurer/chrome-profile"
+# DPI scaling. The vendored dnd-stage UI was sized for 1080p-ish desktop;
+# at 4K 100% scale every button is tiny. Force-scale Chrome's rendering.
+# 2.0 = "200%". Override via env (e.g. ADVENTURER_DPI_SCALE=1.5 = "150%",
+# =1 to disable).
+DPI_SCALE="${ADVENTURER_DPI_SCALE:-2.0}"
+
+# Wipe the Chrome profile each launch so the device-scale-factor and zoom
+# settings start fresh. Chrome remembers per-domain zoom in the profile, and
+# a previous launch with --force-device-scale-factor=1 silently overrides
+# subsequent launches that change the value. Also stops Chrome from prompting
+# about restoring tabs / closed windows.
+rm -rf "$CHROME_PROFILE"
 mkdir -p "$CHROME_PROFILE"
-CHROME_FLAGS=(--app="${URL}" --user-data-dir="${CHROME_PROFILE}" --start-fullscreen --new-window --no-first-run --no-default-browser-check)
+
+CHROME_FLAGS=(
+    --app="${URL}"
+    --user-data-dir="${CHROME_PROFILE}"
+    --start-fullscreen
+    --new-window
+    --no-first-run
+    --no-default-browser-check
+    --disable-features=TranslateUI
+    --force-device-scale-factor="${DPI_SCALE}"
+    --high-dpi-support=1
+)
+echo "  chrome flags: ${CHROME_FLAGS[*]}"
 
 if command -v flatpak >/dev/null && flatpak info com.google.Chrome >/dev/null 2>&1; then
     echo "  launching Chrome (flatpak)"

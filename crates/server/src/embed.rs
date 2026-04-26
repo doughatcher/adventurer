@@ -21,9 +21,9 @@ pub struct DmAssets;
 pub struct PlayerAssets;
 
 /// Root handler — DM stage. Cache-bust the asset URLs the same way
-/// `dnd-stage/server/main.py::root()` does, then inject our `qr-modal.js`
-/// so the QR/players UI overlays the existing vanilla-JS app without
-/// touching `stage.js`.
+/// `dnd-stage/server/main.py::root()` does, then inject our additive scripts
+/// (qr-modal.js for the players/QR overlay, gamepad.js for controller nav)
+/// so they overlay the existing vanilla-JS app without touching `stage.js`.
 pub async fn index() -> impl IntoResponse {
     match DmAssets::get("index.html") {
         Some(file) => {
@@ -31,10 +31,13 @@ pub async fn index() -> impl IntoResponse {
             let ts = chrono::Utc::now().timestamp();
             html = html.replace("/static/style.css\"", &format!("/static/style.css?v={ts}\""));
             html = html.replace("/static/stage.js\"", &format!("/static/stage.js?v={ts}\""));
-            // Inject the QR/players overlay before </body>. It's standalone —
-            // doesn't touch stage.js, just augments the DOM.
             let inject = format!(
-                "<script src=\"/static/qr-modal.js?v={ts}\" defer></script>\n</body>"
+                concat!(
+                    "<script src=\"/static/qr-modal.js?v={ts}\" defer></script>\n",
+                    "<script src=\"/static/gamepad.js?v={ts}\" defer></script>\n",
+                    "</body>"
+                ),
+                ts = ts
             );
             html = html.replace("</body>", &inject);
             ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
