@@ -8,6 +8,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+mod worker;
+
 use adventurer_inference_llm::LlmEngine;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -55,6 +57,12 @@ struct Args {
     #[arg(long)]
     ollama: bool,
 
+    /// Worker mode: load model, then read line-delimited JSON requests from stdin
+    /// and write responses to stdout. Used by the adventurer server to keep an
+    /// LLM engine warm across requests.
+    #[arg(long)]
+    worker: bool,
+
     #[arg(long, default_value = "http://localhost:11434")]
     ollama_base: String,
 
@@ -94,6 +102,15 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+
+    if args.worker {
+        return worker::run(worker::WorkerOpts {
+            model: args.model.clone(),
+            n_ctx: args.n_ctx,
+            gpu_layers: args.gpu_layers,
+        })
+        .await;
+    }
 
     eprintln!("─── adventurer-llm-bench ───");
     let prompt = build_prompt(&args)?;

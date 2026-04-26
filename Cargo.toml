@@ -30,7 +30,7 @@ llama-cpp-2 = { version = "0.1.145", default-features = false, features = ["open
 whisper-rs  = { version = "0.16",    default-features = false, features = ["openmp"] }
 
 # Async + HTTP
-tokio   = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "process", "fs", "sync", "signal"] }
+tokio   = { version = "1", features = ["macros", "rt-multi-thread", "time", "io-util", "io-std", "process", "fs", "sync", "signal"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 
 # Serialization

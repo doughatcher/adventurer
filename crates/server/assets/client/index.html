@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Adventure Log</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3/dist/cytoscape.min.js"></script>
+</head>
+<body>
+
+<!-- Session start overlay (shown when no active session) -->
+<div id="start-overlay">
+  <div id="start-box">
+    <div id="start-title">&#9876; Adventure Log</div>
+    <p>No session in progress.</p>
+    <button id="btn-start-session">&#9654; Start New Session</button>
+    <button id="btn-start-load-history">&#8635; Load Past Session</button>
+  </div>
+</div>
+
+<!-- Character selection overlay (shown on first load if no character chosen) -->
+<div id="char-select-overlay">
+  <div id="char-select-box">
+    <h2>Who are you?</h2>
+    <p>Select your character to continue</p>
+    <div id="char-select-list"><!-- populated by JS --></div>
+    <button class="btn" id="btn-observe" style="margin-top:12px;width:100%">Observe (no character)</button>
+  </div>
+</div>
+
+<div id="review-banner" class="hidden">
+  <span class="review-label">&#8635; Reviewing:</span>
+  <span id="review-session-info"></span>
+  <button id="btn-exit-review" class="btn">&#10005; Back to Live</button>
+</div>
+
+<div id="header">
+  <span id="header-title">&#9876; Adventure Log</span>
+  <input id="session-name" type="text" placeholder="Session name…" value="The Adventure Begins" spellcheck="false">
+  <div class="header-sep"></div>
+  <div id="rec-indicator" role="button" title="Click or R to toggle recording">
+    <span class="rec-dot"></span>
+    <span id="rec-label">Rec</span>
+  </div>
+  <span id="timer">0:00:00</span>
+  <div class="header-actions">
+    <button class="btn" id="btn-history" title="Past sessions">&#8635;</button>
+    <button class="btn" id="btn-update" title="U to force update">Update</button>
+    <button class="btn btn-danger" id="btn-end-session">End</button>
+  </div>
+</div>
+
+<div id="stage">
+  <!-- Left: Party -->
+  <div id="col-party">
+    <div class="col-header">
+      <span class="panel-icon">&#9678;</span>
+      <span class="panel-label">Party</span>
+      <button class="btn-inline" id="btn-add-char" title="Add character">+</button>
+    </div>
+    <div id="party-cards"><!-- populated by JS from state --></div>
+  </div>
+
+  <!-- Center: Combined log -->
+  <div id="col-log">
+    <div class="col-header">
+      <span class="panel-icon">&#8801;</span>
+      <span class="panel-label">Log</span>
+      <div id="combat-badge" class="hidden">&#9876; Combat</div>
+      <div id="log-filters">
+        <button class="filter-btn active" data-cls="tx-dm" title="DM narration">DM</button>
+        <button class="filter-btn active" data-cls="tx-player" title="Player actions">PC</button>
+        <button class="filter-btn active" data-cls="tx-roll" title="Dice rolls">&#9860;</button>
+        <button class="filter-btn active" data-cls="tx-meta" title="Rules/OOC">?</button>
+        <button class="filter-btn" data-cls="tx-noise" title="Chatter/filler">&#8230;</button>
+      </div>
+    </div>
+    <div id="log-body"><!-- story beats + transcript lines interleaved --></div>
+  </div>
+
+  <!-- Right: Scene / Map / Next -->
+  <div id="col-right">
+    <div class="panel" id="panel-scene">
+      <div class="panel-header panel-header-clickable" id="panel-scene-header" title="Click to expand">
+        <span class="panel-icon">&#9672;</span>
+        <span class="panel-label">Scene</span>
+        <span class="panel-expand-hint">&#8599;</span>
+      </div>
+      <div class="panel-body" id="panel-scene-body"><span style="color:var(--text3)">Awaiting session…</span></div>
+    </div>
+    <div class="panel" id="panel-map">
+      <div class="panel-header" id="panel-map-header" title="Click to open fullscreen map" style="cursor:pointer">
+        <span class="panel-icon">&#8862;</span>
+        <span class="panel-label">Map</span>
+        <span style="font-size:10px;color:var(--text3);margin-left:auto">&#8599; VTT</span>
+      </div>
+      <div class="panel-body" id="panel-map-body"><span style="color:var(--text3)">No map yet.</span></div>
+    </div>
+    <div class="panel" id="panel-next">
+      <div class="panel-header panel-header-clickable" id="panel-next-header" title="Click to expand">
+        <span class="panel-icon">&#8594;</span>
+        <span class="panel-label">Next</span>
+        <span class="panel-expand-hint">&#8599;</span>
+      </div>
+      <div class="panel-body" id="panel-next-body"><span style="color:var(--text3)">Start session to get suggestions.</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Map fullscreen modal -->
+<div id="map-modal-overlay">
+  <div id="map-modal">
+    <div id="map-modal-header">
+      <span id="map-modal-title">&#8862; Map</span>
+      <div id="map-modal-tabs">
+        <button class="map-tab" data-tab="vtt">D&amp;D Beyond</button>
+        <button class="map-tab active" data-tab="graph">Graph</button>
+      </div>
+      <button id="map-modal-close">&#10005;</button>
+    </div>
+    <div id="map-tab-vtt" class="map-tab-content hidden">
+      <div id="ddb-config">
+        <label>Map URL</label>
+        <input id="ddb-url-input" type="url" placeholder="https://www.dndbeyond.com/campaigns/…/maps" spellcheck="false">
+        <label>Session Cookie <span class="cookie-hint">(DevTools → Application → Cookies → CobaltSession)</span></label>
+        <input id="ddb-cookie-input" type="password" placeholder="Paste CobaltSession cookie value…">
+        <button id="ddb-load-btn">Load Map</button>
+      </div>
+      <iframe id="ddb-vtt-frame" src="about:blank" allowfullscreen></iframe>
+    </div>
+    <div id="map-tab-graph" class="map-tab-content">
+      <div id="map-modal-cy"></div>
+      <details id="map-modal-raw">
+        <summary>Raw map data</summary>
+        <pre id="map-modal-ascii"></pre>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- Character modal -->
+<div id="modal-overlay">
+  <div id="modal">
+    <h2 id="modal-title">Add Character</h2>
+    <div class="form-row">
+      <label>Name</label>
+      <input id="char-name" type="text" placeholder="Rides the Wake" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label>Class</label>
+      <input id="char-class" type="text" placeholder="Fighter, Rogue, Wizard…">
+    </div>
+    <div class="form-row">
+      <label>HP</label>
+      <div class="row2">
+        <input id="char-hp-cur" type="number" placeholder="Current" min="0">
+        <input id="char-hp-max" type="number" placeholder="Max" min="0">
+      </div>
+    </div>
+    <div class="form-row">
+      <label>AC</label>
+      <input id="char-ac" type="number" placeholder="Armor class" min="0">
+    </div>
+    <div class="form-row">
+      <label>Notes</label>
+      <textarea id="char-notes" rows="2" placeholder="Race, background, items…"></textarea>
+    </div>
+    <div class="modal-btns">
+      <button class="btn-modal-cancel" id="btn-cancel-char">Cancel</button>
+      <button class="btn-modal-save" id="btn-save-char">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Session history modal -->
+<div id="history-overlay">
+  <div id="history-modal">
+    <div id="history-header">
+      <span id="history-title">&#8635; Past Sessions</span>
+      <button id="history-close">&#10005;</button>
+    </div>
+    <div id="history-body">
+      <div id="history-list"><!-- session list --></div>
+      <div id="history-detail">
+        <div id="history-detail-empty">Select a session to view it.</div>
+        <div id="history-detail-content" class="hidden">
+          <div id="history-detail-header">
+            <span id="history-detail-ts"></span>
+            <span id="history-detail-name"></span>
+            <a id="history-recording-link" class="hidden" href="#" target="_blank">&#9654; Recording</a>
+            <button id="btn-load-into-stage" class="hidden">Load into Stage</button>
+          </div>
+          <div id="history-tabs">
+            <button class="history-tab active" data-tab="scene">Scene</button>
+            <button class="history-tab" data-tab="log">Story Log</button>
+            <button class="history-tab" data-tab="transcript">Transcript</button>
+            <button class="history-tab" data-tab="next">Next Steps</button>
+          </div>
+          <div id="history-tab-body"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Decision helper modal -->
+<div id="decision-overlay">
+  <div id="decision-modal">
+    <div id="decision-header">
+      <span id="decision-icon">&#9670;</span>
+      <span id="decision-title">Choose wisely…</span>
+      <button id="decision-close">&#10005;</button>
+    </div>
+    <p id="decision-context"></p>
+    <div id="decision-options"></div>
+  </div>
+</div>
+
+<!-- Panel detail (fullscreen) modal -->
+<div id="panel-detail-overlay">
+  <div id="panel-detail-modal">
+    <div id="panel-detail-header">
+      <span id="panel-detail-title"></span>
+      <button id="panel-detail-close">&#10005;</button>
+    </div>
+    <div id="panel-detail-body"></div>
+  </div>
+</div>
+
+<!-- End session confirm modal -->
+<div id="end-session-overlay">
+  <div id="end-session-modal">
+    <h2>End Session</h2>
+    <p>Archive this session — save panels, transcript, and recording to git, then reset for next time.</p>
+    <label id="end-discard-label">
+      <input type="checkbox" id="end-discard-check">
+      Discard session data — do not save or archive anything
+    </label>
+    <div class="modal-btns">
+      <button class="btn-modal-cancel" id="btn-end-cancel">Cancel</button>
+      <button class="btn-modal-save" id="btn-end-confirm">End &amp; Archive</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/stage.js"></script>
+</body>
+</html>

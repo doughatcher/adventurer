@@ -19,6 +19,12 @@ path = "src/main.rs"
 axum       = { version = "0.7", features = ["ws", "multipart", "macros"] }
 tower      = "0.5"
 tower-http = { version = "0.6", features = ["fs", "trace", "cors"] }
+rust-embed = { version = "8", features = ["interpolate-folder-path"] }
+mime_guess = "2"
+base64     = "0.22"
+regex      = "1"
+chrono     = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+futures-util = "0.3"
 
 clap       = { workspace = true }
 anyhow     = { workspace = true }

@@ -21,6 +21,7 @@ reqwest = { workspace = true }
 tokio   = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+base64  = "0.22"
 
 [features]
 default = []

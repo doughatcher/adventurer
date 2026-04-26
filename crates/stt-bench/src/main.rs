@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Instant;
 
+mod worker;
+
 use adventurer_inference_stt::SttEngine;
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
@@ -28,6 +30,11 @@ struct Args {
     /// Hit local Speaches instead of in-process inference (for A/B comparison).
     #[arg(long)]
     speaches: bool,
+
+    /// Worker mode: load model, then read line-delimited JSON requests from stdin
+    /// and write responses to stdout. Used by the adventurer server.
+    #[arg(long)]
+    worker: bool,
 
     #[arg(long, default_value = "http://localhost:8000")]
     speaches_base: String,
@@ -53,6 +60,14 @@ async fn main() -> Result<()> {
         .init();
 
     let args = Args::parse();
+
+    if args.worker {
+        return worker::run(worker::WorkerOpts {
+            model: args.model.clone(),
+            threads: args.threads,
+        })
+        .await;
+    }
 
     eprintln!("─── adventurer-stt-bench ───");
     eprintln!("audio:   {}", args.audio.display());
