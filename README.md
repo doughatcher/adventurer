@@ -55,6 +55,19 @@ What "shipped" looks like:
   swapping docker-launch for direct subprocess and wiring the Steamworks
   SDK calls.
 
+### What's core vs. extension
+
+Strong opinion baked into the design: **the core offering is transcript
+capture + LLM state extraction + character logins.** Anything else —
+D&D Beyond sheet sync, battlemap render, dice-roll detection, initiative
+tracker, sound-cue triggers, TTS — is a **plugin**, loaded as a
+sub-process via the same line-JSON IPC the LLM/STT workers already use.
+
+Persistent character auth (token list survives server restart, QR
+encodes a single-use invite, DM-issued invite codes) is the next
+concrete change — sketched in [`docs/extensions.md`](docs/extensions.md)
+along with the full plugin contract proposal.
+
 ## Quick start
 
 ```bash
