@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Adventure Log
+GenericName=Live D&D Session Companion
+Comment=Local AI dungeon master companion — voice transcription, party tracking, scene generation
+Exec=/var/home/me/bin/adventurer-launch.sh
+Icon=applications-games
+Terminal=false
+Categories=Game;RolePlaying;
+Keywords=dnd;tabletop;rpg;adventure;
+StartupNotify=true
+StartupWMClass=adventurer

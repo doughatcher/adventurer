@@ -91,6 +91,69 @@ cargo build --release       # CPU only
 
 CUDA/Vulkan native builds need the CUDA toolkit / Vulkan SDK (libvulkan-dev, glslc, Vulkan-Headers ≥ 1.4). Easier to just use Docker.
 
+## Launch as a (non-)Steam game
+
+`scripts/launch.sh` boots the Docker container, waits for `/health`, and opens
+a fullscreen Chrome (`--app=` mode, no chrome) pointed at `localhost:3200`.
+When the browser closes, the container is stopped via `trap`. Logs go to
+`~/.local/state/adventurer/launch.log`.
+
+### One-time install
+
+```bash
+# 1. Install the launcher to ~/bin/
+cp scripts/launch.sh ~/bin/adventurer-launch.sh
+chmod +x ~/bin/adventurer-launch.sh
+
+# 2. Drop the .desktop file (lets Steam's "Add a Non-Steam Game" find it)
+cp scripts/adventurer.desktop ~/.local/share/applications/
+```
+
+### Add to Steam
+
+Two paths — the second is fully automated but needs Steam to be exited.
+
+**A) Through the Steam UI (no Steam restart needed):**
+
+1. Switch to Steam Desktop mode (Steam button → Power → Switch to Desktop)
+2. In the Steam library: **+ Add a Game** → **Add a Non-Steam Game**
+3. Pick **Adventure Log** from the list (it appears because of the `.desktop` file)
+4. Done. Launches via the script when you hit Play.
+
+**B) Programmatically writing `shortcuts.vdf`:**
+
+```bash
+# Quit Steam fully first (System tray → Steam → Exit), then:
+python3 scripts/add-to-steam.py
+# Restart Steam — Adventure Log is in your library.
+```
+
+The script writes a backup to `shortcuts.vdf.bak` before editing. Idempotent —
+safe to re-run; it replaces any existing entry with the same name.
+
+### What the launcher does
+
+1. Detects host LAN IP (`hostname -I`) and passes it via `ADVENTURER_LAN_IP` so
+   the QR code embeds the right URL (Docker can't see the host's LAN IP from
+   inside).
+2. Mounts `~/.local/share/adventurer/session/` for persistent session state.
+3. Starts the container detached, waits up to 120s for `/health`.
+4. Launches Chrome (Flatpak preferred, then native Chrome, then Firefox kiosk,
+   then `xdg-open`) in app/fullscreen mode on the URL.
+5. Foreground-waits on the browser PID so Steam tracks playtime correctly.
+
+### Players join via QR code
+
+Click **♣ Players** in the DM stage header — the modal shows a QR encoding
+`http://<lan-ip>:3200/join`. Phones scan, get a stripped mobile UI showing:
+- Their assigned character (HP bar, conditions, notes)
+- The current scene + party + transcript tail
+- The "Decision" modal when the AI surfaces an active choice
+
+Player → character assignment lives in the same modal: each connected device
+shows up as a row with a dropdown of party characters. Pick one and that
+device's view fills in.
+
 ## Run
 
 The image now ships **two binaries** (`adventurer-poc` for LLM, `adventurer-stt-poc` for STT). The default `CMD` shows the LLM PoC's help; the STT one is invoked by appending `adventurer-stt-poc` after the image name.

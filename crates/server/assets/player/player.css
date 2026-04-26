@@ -1,0 +1,177 @@
+/* Adventure Log — Player view (mobile-first). Color palette mirrors the DM stage. */
+:root {
+  --bg:       #0e1116;
+  --bg2:      #161b22;
+  --card:     #1c222b;
+  --line:     #2a313c;
+  --text:     #d6deea;
+  --text2:    #8d96a7;
+  --text3:    #5b6470;
+  --accent:   #f4b942;
+  --good:     #69d195;
+  --warn:     #f4a04a;
+  --bad:      #e85a5a;
+  --enemy:    #b86060;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+#hdr {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+#hdr-title { font-size: 17px; }
+#hdr-status {
+  font-size: 12px; font-weight: 500;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--line); color: var(--text2);
+}
+#hdr-status.connected { background: rgba(105,209,149,.18); color: var(--good); }
+#hdr-status.connecting { background: rgba(244,160,74,.18); color: var(--warn); }
+#hdr-status.disconnected { background: rgba(232,90,90,.18); color: var(--bad); }
+
+#stage {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 12px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+}
+.card h2 {
+  margin: 0 0 10px 0;
+  font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text2);
+  font-weight: 600;
+}
+
+.hidden { display: none !important; }
+.empty {
+  color: var(--text3);
+  font-style: italic;
+}
+.muted { color: var(--text3); }
+.small { font-size: 12px; }
+.mt { margin-top: 6px; }
+
+/* Character card (the "You" panel) */
+.char-card .char-name {
+  font-size: 22px; font-weight: 700; color: var(--accent);
+}
+.char-card .char-meta {
+  color: var(--text2); font-size: 13px; margin-top: 2px;
+}
+.char-card .char-bars { margin-top: 12px; }
+.bar {
+  position: relative;
+  height: 24px; border-radius: 6px;
+  background: rgba(232,90,90,.18); overflow: hidden;
+}
+.bar-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: var(--good); transition: width .3s ease;
+}
+.bar-label {
+  position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  text-shadow: 0 1px 0 rgba(0,0,0,.5);
+}
+.bar.bloodied .bar-fill { background: var(--warn); }
+.bar.dying    .bar-fill { background: var(--bad); }
+
+.char-conds {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px;
+}
+.cond {
+  background: rgba(244,185,66,.16);
+  color: var(--accent);
+  font-size: 12px; padding: 3px 9px; border-radius: 999px;
+}
+.char-notes {
+  margin-top: 10px; font-size: 13px; color: var(--text2); font-style: italic;
+}
+
+/* Party list */
+#party-list { display: flex; flex-direction: column; gap: 8px; }
+.party-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg2);
+}
+.party-row.is-me { border-color: var(--accent); }
+.party-row.enemy { border-color: rgba(184,96,96,.4); }
+.party-row .pname { font-weight: 600; }
+.party-row .php   { font-variant-numeric: tabular-nums; color: var(--text2); font-size: 13px; }
+.party-row .pclass { color: var(--text3); font-size: 12px; margin-top: 2px; }
+
+.markdown {
+  color: var(--text);
+  font-size: 15px;
+}
+.markdown :first-child { margin-top: 0; }
+.markdown :last-child { margin-bottom: 0; }
+.markdown ul { padding-left: 20px; }
+
+.transcript {
+  margin: 0;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  white-space: pre-wrap; word-break: break-word;
+  color: var(--text2);
+  max-height: 220px; overflow: auto;
+}
+
+/* Decision modal — full-screen on mobile */
+#decision-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.65);
+  display: flex; align-items: flex-end; justify-content: center;
+  z-index: 100;
+}
+#decision-modal {
+  width: 100%; max-width: 600px;
+  background: var(--card);
+  border-top: 2px solid var(--accent);
+  border-radius: 16px 16px 0 0;
+  padding: 20px;
+  max-height: 85vh; overflow: auto;
+}
+#decision-modal h2 { margin: 0 0 8px; color: var(--accent); }
+#decision-modal p { color: var(--text2); margin: 0 0 14px; }
+#decision-options { display: flex; flex-direction: column; gap: 8px; }
+.dec-option {
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg2);
+}
+.dec-option .dec-name { font-weight: 600; color: var(--accent); }
+.dec-option .dec-desc { color: var(--text); margin-top: 4px; font-size: 14px; }
+.dec-option .dec-detail { color: var(--text3); margin-top: 4px; font-size: 12px; }
+
+#decision-close {
+  margin-top: 16px;
+  width: 100%; padding: 12px;
+  background: var(--line); color: var(--text);
+  border: none; border-radius: 8px;
+  font-size: 15px; font-weight: 600;
+}

@@ -17,6 +17,8 @@
 mod api;
 mod embed;
 mod gemma;
+mod lan;
+mod players;
 mod state;
 mod workers;
 mod ws;
@@ -159,10 +161,17 @@ async fn main() -> Result<()> {
         panel_rx,
     );
 
+    let lan_ip = lan::detect_lan_ip();
+    let players = players::Players::new();
+    info!(%lan_ip, port = args.port, "LAN address for QR / join URL");
+
     let ctx = Arc::new(AppContext {
         state: app_state.clone(),
         stt,
         llm,
+        players,
+        lan_ip,
+        port: args.port,
         trigger_state_pass: state_tx,
         trigger_panel_pass: panel_tx,
     });
@@ -171,6 +180,7 @@ async fn main() -> Result<()> {
     // (axum 0.8 uses `{name}` / `{*name}` with braces but cargo resolved 0.7.)
     let app = Router::new()
         .route("/", get(embed::index))
+        .route("/join", get(embed::player_index))
         .route("/health", get(health))
         .route("/api/panels", get(api::get_panels))
         .route("/api/transcript", get(api::get_transcript))
@@ -182,6 +192,10 @@ async fn main() -> Result<()> {
         .route("/api/sessions", get(api::list_sessions))
         .route("/api/sessions/:ts", get(api::get_session))
         .route("/api/session/end", post(api::end_session))
+        .route("/api/lan-info", get(api::get_lan_info))
+        .route("/api/players", get(api::list_players))
+        .route("/api/players/announce", post(api::announce_player))
+        .route("/api/players/:token/assign", post(api::assign_player_character))
         .route("/ws", get(ws::ws_handler))
         .route("/static/*path", get(embed::static_file))
         .with_state(ctx);

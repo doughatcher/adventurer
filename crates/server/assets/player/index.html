@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0e1116">
+  <title>Adventure Log — Player</title>
+  <link rel="stylesheet" href="/static/player.css">
+</head>
+<body>
+
+<header id="hdr">
+  <span id="hdr-title">&#9876; Adventure Log</span>
+  <span id="hdr-status" class="connecting">Connecting…</span>
+</header>
+
+<main id="stage">
+
+  <section id="me" class="card">
+    <h2>You</h2>
+    <div id="me-empty" class="empty">
+      Waiting for the DM to assign you a character.
+      <div class="muted small mt">If they need you, your screen will say so when they pick one.</div>
+    </div>
+    <div id="me-card" class="hidden char-card">
+      <div class="char-name" id="me-name"></div>
+      <div class="char-meta" id="me-meta"></div>
+      <div class="char-bars">
+        <div class="bar" id="me-hp-bar">
+          <div class="bar-fill" id="me-hp-fill"></div>
+          <span class="bar-label" id="me-hp-label"></span>
+        </div>
+      </div>
+      <div class="char-conds" id="me-conds"></div>
+      <div class="char-notes" id="me-notes"></div>
+    </div>
+  </section>
+
+  <section id="scene-section" class="card">
+    <h2>Scene</h2>
+    <div id="scene-body" class="markdown"></div>
+  </section>
+
+  <section id="party-section" class="card">
+    <h2>Party</h2>
+    <div id="party-list"></div>
+  </section>
+
+  <section id="next-section" class="card">
+    <h2>What now?</h2>
+    <div id="next-body" class="markdown"></div>
+  </section>
+
+  <section id="transcript-section" class="card">
+    <h2>Last spoken</h2>
+    <pre id="transcript-tail" class="transcript"></pre>
+  </section>
+
+</main>
+
+<div id="decision-overlay" class="hidden">
+  <div id="decision-modal">
+    <h2 id="decision-title"></h2>
+    <p id="decision-context"></p>
+    <div id="decision-options"></div>
+    <button id="decision-close">Dismiss</button>
+  </div>
+</div>
+
+<script src="/static/player.js" defer></script>
+</body>
+</html>

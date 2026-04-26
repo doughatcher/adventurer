@@ -16,7 +16,8 @@ pub type Panels = BTreeMap<String, String>;
 pub type StateJson = serde_json::Value;
 
 /// Broadcast event types — same shape as `dnd-stage`'s WebSocket payloads
-/// so the existing `client/stage.js` can consume them unchanged.
+/// so the existing `client/stage.js` can consume them unchanged. New variants
+/// are additive — older clients that don't recognize them just ignore.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
@@ -38,6 +39,15 @@ pub enum Event {
     },
     Decision {
         data: serde_json::Value,
+    },
+    /// A player connected (announced via /api/players/announce). DM UI uses this
+    /// to show the "assign character" dropdown.
+    PlayerJoined {
+        player: crate::players::PlayerInfo,
+    },
+    /// A player got a character assigned (or unassigned) by the DM.
+    PlayerAssigned {
+        player: crate::players::PlayerInfo,
     },
 }
 

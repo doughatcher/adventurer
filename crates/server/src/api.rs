@@ -14,6 +14,7 @@
 //!   GET  /api/sessions[/:ts]
 //!   GET  /api/recording/*
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use axum::{
@@ -26,6 +27,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tracing::{info, warn};
 
+use crate::lan;
+use crate::players::{AnnouncePayload, AssignPayload, Players};
 use crate::state::{AppState, Event};
 use crate::workers::{LlmWorker, SttWorker};
 
@@ -33,6 +36,9 @@ pub struct AppContext {
     pub state: AppState,
     pub stt: Arc<SttWorker>,
     pub llm: Arc<LlmWorker>,
+    pub players: Players,
+    pub lan_ip: IpAddr,
+    pub port: u16,
     pub trigger_state_pass: tokio::sync::mpsc::UnboundedSender<()>,
     pub trigger_panel_pass: tokio::sync::mpsc::UnboundedSender<()>,
 }
@@ -169,6 +175,54 @@ pub async fn get_session(State(_ctx): Ctx, Path(ts): Path<String>) -> impl IntoR
 
 pub async fn end_session(State(_ctx): Ctx) -> impl IntoResponse {
     Json(json!({ "ok": true, "stub": true }))
+}
+
+// ─── LAN / QR / players ───
+
+pub async fn get_lan_info(State(ctx): Ctx) -> impl IntoResponse {
+    let url = lan::join_url(ctx.lan_ip, ctx.port);
+    let qr = match lan::qr_svg(&url) {
+        Ok(svg) => svg,
+        Err(e) => {
+            warn!(?e, "qr render failed");
+            String::new()
+        }
+    };
+    Json(json!({
+        "lan_ip":  ctx.lan_ip.to_string(),
+        "port":    ctx.port,
+        "join_url": url,
+        "qr_svg":  qr,
+    }))
+}
+
+pub async fn list_players(State(ctx): Ctx) -> impl IntoResponse {
+    Json(ctx.players.list().await)
+}
+
+pub async fn announce_player(
+    State(ctx): Ctx,
+    Json(p): Json<AnnouncePayload>,
+) -> impl IntoResponse {
+    let info = ctx.players.touch(&p.token, p.label).await;
+    info!(token = %info.token, label = ?info.label, "player announced");
+    ctx.state.broadcast(Event::PlayerJoined { player: info.clone() });
+    Json(info)
+}
+
+pub async fn assign_player_character(
+    State(ctx): Ctx,
+    Path(token): Path<String>,
+    Json(p): Json<AssignPayload>,
+) -> impl IntoResponse {
+    match ctx.players.assign_character(&token, p.character.clone()).await {
+        Some(info) => {
+            info!(token = %token, character = ?p.character, "player assigned character");
+            ctx.state.broadcast(Event::PlayerAssigned { player: info.clone() });
+            Json(json!({ "ok": true, "player": info }))
+        }
+        None => Json(json!({ "ok": false, "error": "unknown player token" })),
+    }
 }
 
 // ─── helpers ───
