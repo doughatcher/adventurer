@@ -7,107 +7,176 @@
 #   Steam → Library → "+ Add a Game" → "Add a Non-Steam Game" → Browse
 #   → /home/me/bin/adventurer-launch.sh
 #
-# The script intentionally stays foreground for the duration of the session so
-# Steam's playtime tracker / "Stop game" button reflects what's actually running.
+# Steam launches scripts from a clean environment that doesn't inherit the
+# user's shell rc files, and the Steam Runtime narrows PATH. Defensive
+# patterns below:
+#
+#   - `set -uo pipefail` (no -e: combined with `[[ ]] && cmd` patterns -e
+#     silently exits when a test is false; that's the bug that made the very
+#     first launch attempt look like an instant crash)
+#   - Hard-set PATH so docker/curl/hostname/awk/flatpak resolve
+#   - `exec >> $LOGFILE 2>&1` from the top so even the early failures are
+#     captured (~/.local/state/adventurer/launch.log)
+#   - Source ~/.env so GITHUB_TOKEN etc. are present
+#   - Explicit `command -v docker` check with an actionable error
 
-set -euo pipefail
+set -uo pipefail
 
-# Source ~/.env so GITHUB_TOKEN / ADVENTURER_* vars are available when Steam
-# launches us in a clean environment without the user's shell rc files.
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+export PATH
+
+LOGFILE="${ADVENTURER_LOG:-${XDG_STATE_HOME:-${HOME}/.local/state}/adventurer/launch.log}"
+mkdir -p "$(dirname "$LOGFILE")"
+# Redirect ALL output to the log from this line on. Steam-launched processes
+# usually have no terminal — without this, errors vanish.
+exec >>"$LOGFILE" 2>&1
+echo
+echo "========================================================================"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] adventurer-launch starting (pid $$)"
+echo "  USER=${USER:-?}  HOME=${HOME:-?}  PWD=$(pwd)"
+echo "  PATH=$PATH"
+
+# Source ~/.env so credentials carried in there reach the container.
 if [[ -f "${HOME}/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
-    . "${HOME}/.env"
+    source "${HOME}/.env" || echo "WARN: ~/.env source failed"
     set +a
+    echo "  sourced ~/.env"
+fi
+
+# Sanity-check critical commands. Bail loudly with the docker install
+# command if missing, so the log is self-explanatory.
+if ! command -v docker >/dev/null 2>&1; then
+    echo "FATAL: docker not found in PATH ($PATH)."
+    echo "  Install: https://docs.docker.com/engine/install/  (or rpm-ostree install moby-engine on Bazzite)"
+    exit 2
 fi
 
 IMAGE="${ADVENTURER_IMAGE:-adventurer:cuda}"
 NAME="${ADVENTURER_CONTAINER:-adventurer-live}"
-PORT="${ADVENTURER_PORT:-3200}"
+# 3210 not 3200 — leaves the legacy dnd-stage uvicorn on 3200 alone while
+# we co-exist. Override with ADVENTURER_PORT=… for any other value.
+PORT="${ADVENTURER_PORT:-3210}"
 MODELS="${ADVENTURER_MODELS:-/var/home/me/repos/adventurer/models}"
 SESSION="${ADVENTURER_SESSION:-${HOME}/.local/share/adventurer/session}"
-LOGFILE="${ADVENTURER_LOG:-${XDG_STATE_HOME:-${HOME}/.local/state}/adventurer/launch.log}"
-mkdir -p "$(dirname "$LOGFILE")" "$SESSION"
+mkdir -p "$SESSION"
 
-# Best-effort LAN IP for the QR code (the container can't see this from inside).
-LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-if [[ -z "$LAN_IP" ]]; then
-    LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')"
+# Confirm the image exists locally — Steam-launched processes can't pull from
+# a registry without auth or network setup, so a missing image is fatal.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "FATAL: docker image '$IMAGE' not found locally."
+    echo "  Build with: cd ~/repos/adventurer && DOCKER_BUILDKIT=1 docker build -f Dockerfile.cuda -t $IMAGE ."
+    exit 3
+fi
+
+# Best-effort LAN IP for the QR (Docker can't see the host LAN from inside).
+LAN_IP=""
+if command -v hostname >/dev/null; then
+    LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+fi
+if [[ -z "$LAN_IP" ]] && command -v ip >/dev/null; then
+    LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' || true)"
 fi
 LAN_IP="${LAN_IP:-127.0.0.1}"
-
-log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOGFILE" >&2; }
+echo "  LAN_IP=$LAN_IP  PORT=$PORT  IMAGE=$IMAGE  SESSION=$SESSION"
 
 cleanup() {
-    log "stopping container ${NAME}"
-    docker stop "${NAME}" >/dev/null 2>&1 || true
+    echo "[$(date '+%H:%M:%S')] cleanup: stopping container ${NAME}"
+    # -t 2 → fast SIGTERM → SIGKILL after 2s so "Stop game" feels responsive
+    # rather than waiting docker's default 10s graceful timeout.
+    docker stop -t 2 "${NAME}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
 
 # ─── 1. ensure no prior container is running ───
 docker rm -f "${NAME}" >/dev/null 2>&1 || true
 
-# ─── 2. start the container ───
-# Pass GitHub credentials through if set in the user's env so /api/session/save
-# works without UI re-config on every launch.
+# ─── 2. assemble env flags WITHOUT the [[ ]] && pattern (set -e safe) ───
 GH_ENV_FLAGS=()
-[[ -n "${GITHUB_TOKEN:-}" ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_PAT=${GITHUB_TOKEN}")
-[[ -n "${ADVENTURER_GITHUB_PAT:-}"    ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_PAT=${ADVENTURER_GITHUB_PAT}")
-[[ -n "${ADVENTURER_GITHUB_REPO:-}"   ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_REPO=${ADVENTURER_GITHUB_REPO}")
-[[ -n "${ADVENTURER_GITHUB_BRANCH:-}" ]] && GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_BRANCH=${ADVENTURER_GITHUB_BRANCH}")
-# Sensible default: point at adventure-log if user hasn't set anything else.
-if [[ -z "${ADVENTURER_GITHUB_REPO:-}" ]]; then
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_PAT=${GITHUB_TOKEN}")
+fi
+if [[ -n "${ADVENTURER_GITHUB_PAT:-}" ]]; then
+    GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_PAT=${ADVENTURER_GITHUB_PAT}")
+fi
+if [[ -n "${ADVENTURER_GITHUB_REPO:-}" ]]; then
+    GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_REPO=${ADVENTURER_GITHUB_REPO}")
+else
     GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_REPO=doughatcher/adventure-log")
 fi
+if [[ -n "${ADVENTURER_GITHUB_BRANCH:-}" ]]; then
+    GH_ENV_FLAGS+=(-e "ADVENTURER_GITHUB_BRANCH=${ADVENTURER_GITHUB_BRANCH}")
+fi
+echo "  github env flags: ${#GH_ENV_FLAGS[@]} entries"
 
-log "starting ${IMAGE} (lan=${LAN_IP}, port=${PORT})"
-docker run -d --name "${NAME}" \
+# ─── 3. start the container ───
+# Run server inside the container on the SAME port we expose, so the QR-encoded
+# URL (which uses the server's --port) matches what's reachable from the LAN.
+echo "[$(date '+%H:%M:%S')] docker run ${IMAGE} (port ${PORT})"
+CONTAINER_ID=$(docker run -d --name "${NAME}" \
     --device nvidia.com/gpu=all \
-    -p "${PORT}:3200" \
+    -p "${PORT}:${PORT}" \
+    -e "PORT=${PORT}" \
     -e "ADVENTURER_LAN_IP=${LAN_IP}" \
     "${GH_ENV_FLAGS[@]}" \
     -v "${MODELS}:/models:ro" \
     -v "${SESSION}:/work/session" \
-    "${IMAGE}" >> "$LOGFILE"
+    "${IMAGE}" 2>&1)
+DOCKER_RC=$?
+if [[ $DOCKER_RC -ne 0 ]]; then
+    echo "FATAL: docker run failed (rc=$DOCKER_RC): $CONTAINER_ID"
+    exit 4
+fi
+echo "  container: ${CONTAINER_ID:0:12}"
 
-# ─── 3. wait for /health ───
-log "waiting for server to come up…"
-for i in {1..120}; do
+# ─── 4. wait for /health ───
+echo "[$(date '+%H:%M:%S')] waiting for server to come up…"
+for i in $(seq 1 120); do
     if curl -sf "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
-        log "server ready (after ${i}s)"
+        echo "  server ready after ${i}s"
         break
     fi
     sleep 1
     if [[ $i -eq 120 ]]; then
-        log "ERROR: server did not become ready in 120s"
-        docker logs --tail 30 "${NAME}" >> "$LOGFILE" 2>&1 || true
-        exit 1
+        echo "ERROR: server did not become ready in 120s"
+        docker logs --tail 50 "${NAME}" 2>&1 || true
+        exit 5
     fi
 done
 
 URL="http://127.0.0.1:${PORT}/"
-log "opening browser → ${URL}"
+echo "[$(date '+%H:%M:%S')] opening browser → ${URL}"
 
-# ─── 4. open browser, prefer kiosk/app modes for fullscreen ───
-# Bazzite ships Chrome as a Flatpak (com.google.Chrome). Use --app= for an
-# app-window without browser chrome — better for the "boot into the game" feel
-# than a regular tab. Falls back to xdg-open for whatever the user has set.
-BROWSER_PID=""
+# ─── 5. open browser fullscreen ───
+# We use a dedicated user-data-dir so Chrome always opens a NEW process tree
+# instead of attaching to an existing Chrome and detaching us instantly. This
+# was the original "exits immediately" bug — flatpak Chrome with no
+# --user-data-dir reuses the running session and our `wait` returned at once.
+CHROME_PROFILE="${HOME}/.cache/adventurer/chrome-profile"
+mkdir -p "$CHROME_PROFILE"
+CHROME_FLAGS=(--app="${URL}" --user-data-dir="${CHROME_PROFILE}" --start-fullscreen --new-window --no-first-run --no-default-browser-check)
+
 if command -v flatpak >/dev/null && flatpak info com.google.Chrome >/dev/null 2>&1; then
-    flatpak run com.google.Chrome --app="${URL}" --start-fullscreen >>"$LOGFILE" 2>&1 &
-    BROWSER_PID=$!
-    log "launched Chrome (flatpak) PID=${BROWSER_PID}"
+    echo "  launching Chrome (flatpak)"
+    flatpak run com.google.Chrome "${CHROME_FLAGS[@]}" &
 elif command -v google-chrome >/dev/null; then
-    google-chrome --app="${URL}" --start-fullscreen >>"$LOGFILE" 2>&1 &
-    BROWSER_PID=$!
+    echo "  launching Chrome (native)"
+    google-chrome "${CHROME_FLAGS[@]}" &
 elif command -v firefox >/dev/null; then
-    firefox --kiosk "${URL}" >>"$LOGFILE" 2>&1 &
-    BROWSER_PID=$!
+    echo "  launching Firefox kiosk"
+    firefox --kiosk "${URL}" &
+elif command -v xdg-open >/dev/null; then
+    echo "  launching default browser via xdg-open"
+    xdg-open "${URL}" &
 else
-    xdg-open "${URL}" >>"$LOGFILE" 2>&1 &
-    BROWSER_PID=$!
+    echo "WARN: no browser found — UI is at $URL"
 fi
 
-# ─── 5. wait for the browser to close, then trap cleanup runs ───
-wait "${BROWSER_PID}" 2>/dev/null || true
-log "browser exited; container will be stopped by trap"
+# ─── 6. wait for the CONTAINER, not the browser ───
+# The browser process may be unreliable to wait on (flatpak detach, single-
+# instance reuse, gamescope quirks). The container is what defines the
+# session lifetime: it runs until our trap or Steam's "Stop game" stops it.
+echo "[$(date '+%H:%M:%S')] waiting on container (Steam → Stop game to exit)"
+docker wait "${NAME}" >/dev/null 2>&1 || true
+echo "[$(date '+%H:%M:%S')] container exited; launcher done"
