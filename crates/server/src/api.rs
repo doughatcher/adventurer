@@ -102,7 +102,7 @@ pub async fn post_voice(State(ctx): Ctx, mut multipart: Multipart) -> impl IntoR
         );
     };
     let format = mime_to_ffmpeg_format(&content_type);
-    let ext = format;  // we use the same string for the file extension
+    let ext = format; // we use the same string for the file extension
 
     // STEP 1: stamp a session_id if this is the first audio of the session.
     let session_id = ctx.state.ensure_session_id().await;
@@ -120,8 +120,10 @@ pub async fn post_voice(State(ctx): Ctx, mut multipart: Multipart) -> impl IntoR
             "status": "write_fail",
             "error": format!("{e}"),
         }));
-        return (StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "ok": false, "error": format!("write: {e}") })));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "ok": false, "error": format!("write: {e}") })),
+        );
     }
 
     info!(
@@ -143,7 +145,9 @@ pub async fn post_voice(State(ctx): Ctx, mut multipart: Multipart) -> impl IntoR
             let text = resp.text.trim().to_string();
             let kind = if text.is_empty() || is_whisper_hallucination(&text) {
                 "skipped"
-            } else { "ok" };
+            } else {
+                "ok"
+            };
             ctx.state.append_raw_event(json!({
                 "ts": now,
                 "session_id": session_id,
@@ -159,22 +163,31 @@ pub async fn post_voice(State(ctx): Ctx, mut multipart: Multipart) -> impl IntoR
             }));
             if kind == "skipped" {
                 info!(text = %text, "voice: skipping hallucinated/empty");
-                return (StatusCode::OK, Json(json!({
-                    "ok": false, "text": "", "skipped": true,
-                    "audio_file": audio_path.file_name().and_then(|n| n.to_str()),
-                })));
+                return (
+                    StatusCode::OK,
+                    Json(json!({
+                        "ok": false, "text": "", "skipped": true,
+                        "audio_file": audio_path.file_name().and_then(|n| n.to_str()),
+                    })),
+                );
             }
             let ts = chrono::Local::now().format("%H:%M:%S");
             let line = format!("\n**[{ts}]** {text}");
             let (full, tail) = ctx.state.append_transcript(&line).await;
             ctx.state.mirror_transcript(&full);
-            ctx.state.broadcast(Event::Transcript { content: full, tail });
+            ctx.state.broadcast(Event::Transcript {
+                content: full,
+                tail,
+            });
             let _ = ctx.trigger_state_pass.send(());
             let _ = ctx.trigger_panel_pass.send(());
-            (StatusCode::OK, Json(json!({
-                "ok": true, "text": text,
-                "audio_file": audio_path.file_name().and_then(|n| n.to_str()),
-            })))
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true, "text": text,
+                    "audio_file": audio_path.file_name().and_then(|n| n.to_str()),
+                })),
+            )
         }
         Err(e) => {
             ctx.state.append_raw_event(json!({
@@ -188,10 +201,16 @@ pub async fn post_voice(State(ctx): Ctx, mut multipart: Multipart) -> impl IntoR
                 "status": "stt_error",
                 "error": format!("{e:#}"),
             }));
-            warn!(?e, "stt worker error — chunk preserved at {}", audio_path.display());
-            (StatusCode::INTERNAL_SERVER_ERROR,
-             Json(json!({ "ok": false, "error": format!("{e:#}"),
-                          "audio_file": audio_path.file_name().and_then(|n| n.to_str()) })))
+            warn!(
+                ?e,
+                "stt worker error — chunk preserved at {}",
+                audio_path.display()
+            );
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:#}"),
+                          "audio_file": audio_path.file_name().and_then(|n| n.to_str()) })),
+            )
         }
     }
 }
@@ -228,7 +247,11 @@ pub async fn add_character(State(_ctx): Ctx, Json(c): Json<CharacterIn>) -> impl
     Json(json!({ "ok": true, "slug": slug }))
 }
 
-pub async fn patch_character(State(_ctx): Ctx, Path(slug): Path<String>, Json(_v): Json<Value>) -> impl IntoResponse {
+pub async fn patch_character(
+    State(_ctx): Ctx,
+    Path(slug): Path<String>,
+    Json(_v): Json<Value>,
+) -> impl IntoResponse {
     Json(json!({ "ok": true, "slug": slug }))
 }
 
@@ -267,13 +290,12 @@ pub async fn list_players(State(ctx): Ctx) -> impl IntoResponse {
     Json(ctx.players.list().await)
 }
 
-pub async fn announce_player(
-    State(ctx): Ctx,
-    Json(p): Json<AnnouncePayload>,
-) -> impl IntoResponse {
+pub async fn announce_player(State(ctx): Ctx, Json(p): Json<AnnouncePayload>) -> impl IntoResponse {
     let info = ctx.players.touch(&p.token, p.label).await;
     info!(token = %info.token, label = ?info.label, "player announced");
-    ctx.state.broadcast(Event::PlayerJoined { player: info.clone() });
+    ctx.state.broadcast(Event::PlayerJoined {
+        player: info.clone(),
+    });
     Json(info)
 }
 
@@ -282,10 +304,16 @@ pub async fn assign_player_character(
     Path(token): Path<String>,
     Json(p): Json<AssignPayload>,
 ) -> impl IntoResponse {
-    match ctx.players.assign_character(&token, p.character.clone()).await {
+    match ctx
+        .players
+        .assign_character(&token, p.character.clone())
+        .await
+    {
         Some(info) => {
             info!(token = %token, character = ?p.character, "player assigned character");
-            ctx.state.broadcast(Event::PlayerAssigned { player: info.clone() });
+            ctx.state.broadcast(Event::PlayerAssigned {
+                player: info.clone(),
+            });
             Json(json!({ "ok": true, "player": info }))
         }
         None => Json(json!({ "ok": false, "error": "unknown player token" })),
@@ -351,10 +379,7 @@ pub struct SaveSessionPayload {
 /// Browser → server diagnostic logging. Fire-and-forget POSTs from the
 /// gamepad/input debug overlay so we can see what reaches the page without
 /// reading the on-screen overlay over a TV. Body is free-form JSON.
-pub async fn log_input_debug(
-    State(_ctx): Ctx,
-    Json(v): Json<Value>,
-) -> impl IntoResponse {
+pub async fn log_input_debug(State(_ctx): Ctx, Json(v): Json<Value>) -> impl IntoResponse {
     let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("?");
     info!(target: "adventurer::input_debug", kind, payload = %v, "browser input event");
     StatusCode::NO_CONTENT
@@ -373,14 +398,15 @@ pub async fn get_session_info(State(ctx): Ctx) -> impl IntoResponse {
 pub struct SetModePayload {
     pub mode: String,
 }
-pub async fn set_session_mode(
-    State(ctx): Ctx,
-    Json(p): Json<SetModePayload>,
-) -> impl IntoResponse {
+pub async fn set_session_mode(State(ctx): Ctx, Json(p): Json<SetModePayload>) -> impl IntoResponse {
     let mode = match p.mode.as_str() {
         "test" | "live" => p.mode,
-        other => return (StatusCode::BAD_REQUEST,
-                         Json(json!({ "ok": false, "error": format!("unknown mode: {other:?}") }))),
+        other => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": format!("unknown mode: {other:?}") })),
+            )
+        }
     };
     ctx.state.set_session_mode(&mode).await;
     info!(mode = %mode, "session mode set");
@@ -401,9 +427,9 @@ pub async fn start_session(
     State(ctx): Ctx,
     Json(p): Json<StartSessionPayload>,
 ) -> impl IntoResponse {
-    let id = p.session_id.unwrap_or_else(||
-        chrono::Local::now().format("%Y-%m-%d-%H%M").to_string()
-    );
+    let id = p
+        .session_id
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d-%H%M").to_string());
     ctx.state.set_session_id(id.clone()).await;
     if let Some(m) = p.mode.as_deref() {
         if m == "live" || m == "test" {
@@ -411,9 +437,12 @@ pub async fn start_session(
         }
     }
     info!(session_id = %id, "session started");
-    (StatusCode::OK, Json(json!({
-        "ok": true, "session_id": id, "mode": ctx.state.session_mode().await,
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true, "session_id": id, "mode": ctx.state.session_mode().await,
+        })),
+    )
 }
 
 // ─── continue from a previously archived adventure-log session ───
@@ -421,21 +450,25 @@ pub async fn start_session(
 pub async fn list_adventure_log_sessions(State(ctx): Ctx) -> impl IntoResponse {
     let cfg = ctx.config.snapshot().await;
     if !cfg.is_ready() {
-        return (StatusCode::BAD_REQUEST,
-                Json(json!({ "ok": false, "error": "GitHub repo + PAT not configured" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "GitHub repo + PAT not configured" })),
+        );
     }
     let branch = cfg.branch_or_main().to_string();
     let backend = GitHubBackend {
-        repo:   cfg.repo.expect("checked above"),
+        repo: cfg.repo.expect("checked above"),
         branch,
-        pat:    cfg.pat.expect("checked above"),
+        pat: cfg.pat.expect("checked above"),
     };
     match backend.list_sessions().await {
         Ok(ids) => (StatusCode::OK, Json(json!({ "ok": true, "sessions": ids }))),
         Err(e) => {
             warn!(?e, "list_adventure_log_sessions failed");
-            (StatusCode::INTERNAL_SERVER_ERROR,
-             Json(json!({ "ok": false, "error": format!("{e:#}") })))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:#}") })),
+            )
         }
     }
 }
@@ -445,48 +478,55 @@ pub struct LoadSessionPayload {
     pub session_id: String,
 }
 
-pub async fn load_session(
-    State(ctx): Ctx,
-    Json(p): Json<LoadSessionPayload>,
-) -> impl IntoResponse {
+pub async fn load_session(State(ctx): Ctx, Json(p): Json<LoadSessionPayload>) -> impl IntoResponse {
     let cfg = ctx.config.snapshot().await;
     if !cfg.is_ready() {
-        return (StatusCode::BAD_REQUEST,
-                Json(json!({ "ok": false, "error": "GitHub repo + PAT not configured" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "GitHub repo + PAT not configured" })),
+        );
     }
     let branch = cfg.branch_or_main().to_string();
     let backend = GitHubBackend {
-        repo:   cfg.repo.expect("checked above"),
+        repo: cfg.repo.expect("checked above"),
         branch,
-        pat:    cfg.pat.expect("checked above"),
+        pat: cfg.pat.expect("checked above"),
     };
     let loaded = match backend.load_session(&p.session_id).await {
         Ok(s) => s,
         Err(e) => {
             warn!(?e, "load_session failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "ok": false, "error": format!("{e:#}") })));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": format!("{e:#}") })),
+            );
         }
     };
     // Seed the running session with the loaded data + adopt its session_id so
     // future /api/session/save updates the SAME folder rather than creating
     // a new sibling.
     ctx.state.set_session_id(loaded.id.clone()).await;
-    ctx.state.load_full(loaded.transcript.clone(), loaded.state.clone(), loaded.panels.clone()).await;
+    ctx.state
+        .load_full(
+            loaded.transcript.clone(),
+            loaded.state.clone(),
+            loaded.panels.clone(),
+        )
+        .await;
     info!(session_id = %loaded.id, transcript_len = loaded.transcript.len(),
           "loaded session from adventure-log");
-    (StatusCode::OK, Json(json!({
-        "ok": true,
-        "session_id": loaded.id,
-        "transcript_len": loaded.transcript.len(),
-        "panels": loaded.panels.keys().collect::<Vec<_>>(),
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "session_id": loaded.id,
+            "transcript_len": loaded.transcript.len(),
+            "panels": loaded.panels.keys().collect::<Vec<_>>(),
+        })),
+    )
 }
 
-pub async fn save_session(
-    State(ctx): Ctx,
-    Json(p): Json<SaveSessionPayload>,
-) -> impl IntoResponse {
+pub async fn save_session(State(ctx): Ctx, Json(p): Json<SaveSessionPayload>) -> impl IntoResponse {
     if ctx.state.session_mode().await == "test" {
         return (
             StatusCode::BAD_REQUEST,
@@ -519,14 +559,16 @@ pub async fn save_session(
             from_state
         }
     };
-    let message = p.message.unwrap_or_else(|| format!("Session archive: {session_id}"));
+    let message = p
+        .message
+        .unwrap_or_else(|| format!("Session archive: {session_id}"));
     // Extract first — `branch_or_main()` borrows `cfg`, so we can't call it
     // after `unwrap()`-ing other fields out.
     let branch = cfg.branch_or_main().to_string();
     let backend = GitHubBackend {
-        repo:   cfg.repo.expect("checked is_ready above"),
+        repo: cfg.repo.expect("checked is_ready above"),
         branch,
-        pat:    cfg.pat.expect("checked is_ready above"),
+        pat: cfg.pat.expect("checked is_ready above"),
     };
 
     // Snapshot session content into PushFiles.
@@ -535,17 +577,16 @@ pub async fn save_session(
 
     let mut files: Vec<PushFile> = Vec::new();
     files.push(PushFile {
-        path:    format!("{prefix}/transcript.md"),
+        path: format!("{prefix}/transcript.md"),
         content: snap.transcript.into_bytes(),
     });
     files.push(PushFile {
-        path:    format!("{prefix}/state.json"),
-        content: serde_json::to_vec_pretty(&snap.state)
-            .unwrap_or_else(|_| b"{}".to_vec()),
+        path: format!("{prefix}/state.json"),
+        content: serde_json::to_vec_pretty(&snap.state).unwrap_or_else(|_| b"{}".to_vec()),
     });
     for (name, body) in &snap.panels {
         files.push(PushFile {
-            path:    format!("{prefix}/{name}.md"),
+            path: format!("{prefix}/{name}.md"),
             content: body.clone().into_bytes(),
         });
     }
@@ -597,10 +638,21 @@ fn is_whisper_hallucination(text: &str) -> bool {
     let t = text.trim();
     let lower = t.to_lowercase();
     // Exact-match common empties (whisper.cpp returns these for silent audio)
-    if matches!(lower.as_str(),
-        "[blank_audio]" | "[silence]" | "[inaudible]" | "[no audio]" |
-        "[no speech]" | "(silence)" | "(blank_audio)" | "(no audio)" |
-        "[ silence ]" | "blank_audio" | "silence" | "you" | "."
+    if matches!(
+        lower.as_str(),
+        "[blank_audio]"
+            | "[silence]"
+            | "[inaudible]"
+            | "[no audio]"
+            | "[no speech]"
+            | "(silence)"
+            | "(blank_audio)"
+            | "(no audio)"
+            | "[ silence ]"
+            | "blank_audio"
+            | "silence"
+            | "you"
+            | "."
     ) {
         return true;
     }
@@ -653,10 +705,143 @@ fn slugify(name: &str) -> String {
 
 fn mime_to_ffmpeg_format(mime: &str) -> &'static str {
     let m = mime.to_ascii_lowercase();
-    if m.contains("webm") { "webm" }
-    else if m.contains("ogg") || m.contains("opus") { "ogg" }
-    else if m.contains("mp4") || m.contains("m4a") { "mp4" }
-    else if m.contains("wav") { "wav" }
-    else if m.contains("mp3") || m.contains("mpeg") { "mp3" }
-    else { "webm" }  // browser default
+    if m.contains("webm") {
+        "webm"
+    } else if m.contains("ogg") || m.contains("opus") {
+        "ogg"
+    } else if m.contains("mp4") || m.contains("m4a") {
+        "mp4"
+    } else if m.contains("wav") {
+        "wav"
+    } else if m.contains("mp3") || m.contains("mpeg") {
+        "mp3"
+    } else {
+        "webm"
+    } // browser default
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── is_whisper_hallucination ─────────────────────────────────────
+    // Two-tier policy: only filter the 3 sentinel "I heard nothing"
+    // markers + a hand-curated list of YouTube end-card phrases. Real
+    // ambient captures like [paper rustling] MUST pass through.
+
+    #[test]
+    fn rejects_blank_audio_sentinels() {
+        assert!(is_whisper_hallucination("[BLANK_AUDIO]"));
+        assert!(is_whisper_hallucination("[blank_audio]"));
+        assert!(is_whisper_hallucination("[silence]"));
+        assert!(is_whisper_hallucination("[inaudible]"));
+        assert!(is_whisper_hallucination("[no audio]"));
+        assert!(is_whisper_hallucination("(silence)"));
+    }
+
+    #[test]
+    fn rejects_single_token_artifacts() {
+        // Whisper sometimes returns just "you" or "." on noise.
+        assert!(is_whisper_hallucination("you"));
+        assert!(is_whisper_hallucination("."));
+    }
+
+    #[test]
+    fn rejects_youtube_end_cards() {
+        assert!(is_whisper_hallucination("Thank you for watching!"));
+        assert!(is_whisper_hallucination("Thanks for watching"));
+        assert!(is_whisper_hallucination(
+            "Subtitles by the Amara.org community"
+        ));
+        assert!(is_whisper_hallucination("Music by AudioLibrary.com"));
+        assert!(is_whisper_hallucination("Like and subscribe to my channel"));
+        assert!(is_whisper_hallucination("Video by David"));
+        assert!(is_whisper_hallucination("See you next time"));
+    }
+
+    #[test]
+    fn keeps_real_ambient_captures() {
+        // The whole point of dialing back the filter — real ambient
+        // sound captures from gemma's gf painting in the room must
+        // make it through to the transcript.
+        assert!(!is_whisper_hallucination("[paper rustling]"));
+        assert!(!is_whisper_hallucination("[chair creaks]"));
+        assert!(!is_whisper_hallucination("[footsteps approaching]"));
+        assert!(!is_whisper_hallucination("[door opens]"));
+        assert!(!is_whisper_hallucination("[music playing]"));
+    }
+
+    #[test]
+    fn keeps_real_dialog() {
+        assert!(!is_whisper_hallucination("I cast fireball at the goblin"));
+        assert!(!is_whisper_hallucination("Aryn rolls a 17 for athletics"));
+        assert!(!is_whisper_hallucination(
+            "It seems we have arrived at the temple"
+        ));
+    }
+
+    // ─── slugify ─────────────────────────────────────────────────────
+
+    #[test]
+    fn slugify_basic_ascii() {
+        assert_eq!(slugify("Aryn the Druid"), "aryn-the-druid");
+        assert_eq!(slugify("Goblin"), "goblin");
+    }
+
+    #[test]
+    fn slugify_collapses_runs_and_strips_trailing_dashes() {
+        assert_eq!(slugify("  whitespace  surround  "), "whitespace-surround");
+        assert_eq!(slugify("multiple---dashes"), "multiple-dashes");
+        assert_eq!(slugify("trailing!!!"), "trailing");
+        assert_eq!(slugify("!!!leading"), "leading");
+    }
+
+    #[test]
+    fn slugify_lowercases() {
+        assert_eq!(slugify("MiXeD CaSe"), "mixed-case");
+    }
+
+    #[test]
+    fn slugify_handles_special_chars() {
+        // Apostrophes, parentheses etc. become dashes/dropped.
+        assert_eq!(slugify("Rides-the-Wake"), "rides-the-wake");
+        assert_eq!(slugify("A'priest (B)"), "a-priest-b");
+    }
+
+    #[test]
+    fn slugify_empty_input() {
+        assert_eq!(slugify(""), "");
+        assert_eq!(slugify("!@#$%"), "");
+    }
+
+    // ─── mime_to_ffmpeg_format ───────────────────────────────────────
+
+    #[test]
+    fn mime_browser_codec_strings() {
+        assert_eq!(mime_to_ffmpeg_format("audio/webm"), "webm");
+        assert_eq!(mime_to_ffmpeg_format("audio/webm;codecs=opus"), "webm");
+        assert_eq!(mime_to_ffmpeg_format("audio/ogg;codecs=opus"), "ogg");
+        // Safari / iOS — both mp4 and m4a should map to mp4 for ffmpeg.
+        assert_eq!(mime_to_ffmpeg_format("audio/mp4"), "mp4");
+        assert_eq!(mime_to_ffmpeg_format("audio/mp4;codecs=mp4a.40.2"), "mp4");
+        assert_eq!(mime_to_ffmpeg_format("audio/x-m4a"), "mp4");
+        assert_eq!(mime_to_ffmpeg_format("audio/wav"), "wav");
+        assert_eq!(mime_to_ffmpeg_format("audio/mp3"), "mp3");
+        assert_eq!(mime_to_ffmpeg_format("audio/mpeg"), "mp3");
+    }
+
+    #[test]
+    fn mime_case_insensitive() {
+        assert_eq!(mime_to_ffmpeg_format("AUDIO/WEBM"), "webm");
+        assert_eq!(mime_to_ffmpeg_format("Audio/MP4"), "mp4");
+    }
+
+    #[test]
+    fn mime_unknown_falls_back_to_webm() {
+        // The browser's default MediaRecorder mimetype is webm in
+        // Chrome/Firefox so unknown == "probably webm" is the right
+        // optimistic guess for ffmpeg to try first.
+        assert_eq!(mime_to_ffmpeg_format(""), "webm");
+        assert_eq!(mime_to_ffmpeg_format("audio/something-weird"), "webm");
+    }
 }

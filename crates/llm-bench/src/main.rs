@@ -20,7 +20,10 @@ const SYSTEM_PROMPT: &str =
     "You are a precise D&D session state tracker. Output only what is asked, in exact format specified. No extra commentary.";
 
 #[derive(Parser, Debug)]
-#[command(version, about = "PoC bench: gemma4 state extraction via in-process llama.cpp vs Ollama")]
+#[command(
+    version,
+    about = "PoC bench: gemma4 state extraction via in-process llama.cpp vs Ollama"
+)]
 struct Args {
     /// Path to a GGUF model file. Default: dolphin3:8b blob (Llama 3.1 arch).
     #[arg(
@@ -95,8 +98,9 @@ fn build_prompt(args: &Args) -> Result<String> {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,adventurer_inference=info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("warn,adventurer_inference=info")
+            }),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -117,7 +121,10 @@ async fn main() -> Result<()> {
     eprintln!("prompt: {} chars", prompt.len());
 
     let (output, generated_tokens, elapsed_secs) = if args.ollama {
-        eprintln!("backend: ollama @ {} ({})", args.ollama_base, args.ollama_model);
+        eprintln!(
+            "backend: ollama @ {} ({})",
+            args.ollama_base, args.ollama_model
+        );
         run_ollama(&args, &prompt).await?
     } else {
         eprintln!("backend: in-process llama-cpp-2");

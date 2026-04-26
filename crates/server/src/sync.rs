@@ -22,7 +22,7 @@ use serde_json::json;
 
 #[derive(Debug)]
 pub struct GitHubBackend {
-    pub repo: String,    // "owner/repo"
+    pub repo: String, // "owner/repo"
     pub branch: String,
     pub pat: String,
 }
@@ -77,7 +77,11 @@ impl GitHubBackend {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("https://api.github.com/repos/{}/{}", self.repo, path.trim_start_matches('/'))
+        format!(
+            "https://api.github.com/repos/{}/{}",
+            self.repo,
+            path.trim_start_matches('/')
+        )
     }
 
     pub async fn push_session(&self, message: &str, files: &[PushFile]) -> Result<PushResult> {
@@ -95,7 +99,9 @@ impl GitHubBackend {
         // 3. blobs
         let mut tree_entries = Vec::with_capacity(files.len());
         for f in files {
-            let sha = self.create_blob(&client, &f.content).await
+            let sha = self
+                .create_blob(&client, &f.content)
+                .await
                 .with_context(|| format!("blob for {}", f.path))?;
             tree_entries.push(json!({
                 "path": f.path,
@@ -106,10 +112,14 @@ impl GitHubBackend {
         }
 
         // 4. tree
-        let new_tree_sha = self.create_tree(&client, &parent_tree, &tree_entries).await?;
+        let new_tree_sha = self
+            .create_tree(&client, &parent_tree, &tree_entries)
+            .await?;
 
         // 5. commit
-        let new_commit_sha = self.create_commit(&client, message, &new_tree_sha, &head_sha).await?;
+        let new_commit_sha = self
+            .create_commit(&client, message, &new_tree_sha, &head_sha)
+            .await?;
 
         // 6. ref update
         self.update_ref(&client, &new_commit_sha).await?;
@@ -125,35 +135,48 @@ impl GitHubBackend {
 
     async fn get_ref(&self, c: &reqwest::Client) -> Result<String> {
         #[derive(Deserialize)]
-        struct R { object: ObjRef }
+        struct R {
+            object: ObjRef,
+        }
         #[derive(Deserialize)]
-        struct ObjRef { sha: String }
+        struct ObjRef {
+            sha: String,
+        }
         let url = self.url(&format!("git/ref/heads/{}", self.branch));
-        let r: R = api_json(c.get(&url)).await
+        let r: R = api_json(c.get(&url))
+            .await
             .with_context(|| format!("get ref {url}"))?;
         Ok(r.object.sha)
     }
 
     async fn get_commit_tree(&self, c: &reqwest::Client, commit_sha: &str) -> Result<String> {
         #[derive(Deserialize)]
-        struct R { tree: TreeRef }
+        struct R {
+            tree: TreeRef,
+        }
         #[derive(Deserialize)]
-        struct TreeRef { sha: String }
+        struct TreeRef {
+            sha: String,
+        }
         let url = self.url(&format!("git/commits/{commit_sha}"));
-        let r: R = api_json(c.get(&url)).await
+        let r: R = api_json(c.get(&url))
+            .await
             .with_context(|| format!("get commit {commit_sha}"))?;
         Ok(r.tree.sha)
     }
 
     async fn create_blob(&self, c: &reqwest::Client, content: &[u8]) -> Result<String> {
         #[derive(Deserialize)]
-        struct R { sha: String }
+        struct R {
+            sha: String,
+        }
         let body = json!({
             "encoding": "base64",
             "content": base64::engine::general_purpose::STANDARD.encode(content),
         });
         let url = self.url("git/blobs");
-        let r: R = api_json(c.post(&url).json(&body)).await
+        let r: R = api_json(c.post(&url).json(&body))
+            .await
             .context("create blob")?;
         Ok(r.sha)
     }
@@ -165,10 +188,13 @@ impl GitHubBackend {
         entries: &[serde_json::Value],
     ) -> Result<String> {
         #[derive(Deserialize)]
-        struct R { sha: String }
+        struct R {
+            sha: String,
+        }
         let body = json!({ "base_tree": base_tree, "tree": entries });
         let url = self.url("git/trees");
-        let r: R = api_json(c.post(&url).json(&body)).await
+        let r: R = api_json(c.post(&url).json(&body))
+            .await
             .context("create tree")?;
         Ok(r.sha)
     }
@@ -181,14 +207,17 @@ impl GitHubBackend {
         parent_sha: &str,
     ) -> Result<String> {
         #[derive(Deserialize)]
-        struct R { sha: String }
+        struct R {
+            sha: String,
+        }
         let body = json!({
             "message": message,
             "tree":    tree_sha,
             "parents": [parent_sha],
         });
         let url = self.url("git/commits");
-        let r: R = api_json(c.post(&url).json(&body)).await
+        let r: R = api_json(c.post(&url).json(&body))
+            .await
             .context("create commit")?;
         Ok(r.sha)
     }
@@ -196,7 +225,11 @@ impl GitHubBackend {
     async fn update_ref(&self, c: &reqwest::Client, commit_sha: &str) -> Result<()> {
         let body = json!({ "sha": commit_sha, "force": false });
         let url = self.url(&format!("git/refs/heads/{}", self.branch));
-        let resp = c.patch(&url).json(&body).send().await
+        let resp = c
+            .patch(&url)
+            .json(&body)
+            .send()
+            .await
             .context("PATCH ref")?;
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
@@ -213,16 +246,22 @@ impl GitHubBackend {
     /// dnd-stage and by our own `/api/session/save`).
     pub async fn list_sessions(&self) -> Result<Vec<String>> {
         #[derive(Deserialize)]
-        struct Entry { name: String, #[serde(rename = "type")] kind: String }
+        struct Entry {
+            name: String,
+            #[serde(rename = "type")]
+            kind: String,
+        }
         let client = self.client()?;
         let url = self.url("contents/data/sessions");
-        let entries: Vec<Entry> = api_json(client.get(&url)).await
+        let entries: Vec<Entry> = api_json(client.get(&url))
+            .await
             .with_context(|| format!("GET {url}"))?;
-        let mut ids: Vec<String> = entries.into_iter()
+        let mut ids: Vec<String> = entries
+            .into_iter()
             .filter(|e| e.kind == "dir")
             .map(|e| e.name)
             .collect();
-        ids.sort_by(|a, b| b.cmp(a));   // newest first
+        ids.sort_by(|a, b| b.cmp(a)); // newest first
         Ok(ids)
     }
 
@@ -231,10 +270,15 @@ impl GitHubBackend {
     /// session may pre-date a particular panel).
     pub async fn load_session(&self, id: &str) -> Result<LoadedSession> {
         #[derive(Deserialize)]
-        struct ContentsEntry { name: String, #[serde(rename = "type")] kind: String }
+        struct ContentsEntry {
+            name: String,
+            #[serde(rename = "type")]
+            kind: String,
+        }
         let client = self.client()?;
         let dir_url = self.url(&format!("contents/data/sessions/{id}"));
-        let files: Vec<ContentsEntry> = api_json(client.get(&dir_url)).await
+        let files: Vec<ContentsEntry> = api_json(client.get(&dir_url))
+            .await
             .with_context(|| format!("GET {dir_url}"))?;
 
         let mut transcript = String::new();
@@ -260,14 +304,28 @@ impl GitHubBackend {
             }
         }
 
-        Ok(LoadedSession { id: id.to_string(), transcript, state, panels })
+        Ok(LoadedSession {
+            id: id.to_string(),
+            transcript,
+            state,
+            panels,
+        })
     }
 
-    async fn fetch_file(&self, c: &reqwest::Client, session_id: &str, name: &str) -> Result<Vec<u8>> {
+    async fn fetch_file(
+        &self,
+        c: &reqwest::Client,
+        session_id: &str,
+        name: &str,
+    ) -> Result<Vec<u8>> {
         #[derive(Deserialize)]
-        struct R { content: String, encoding: String }
+        struct R {
+            content: String,
+            encoding: String,
+        }
         let url = self.url(&format!("contents/data/sessions/{session_id}/{name}"));
-        let r: R = api_json(c.get(&url)).await
+        let r: R = api_json(c.get(&url))
+            .await
             .with_context(|| format!("GET {url}"))?;
         if r.encoding != "base64" {
             bail!("unexpected encoding {} for {url}", r.encoding);

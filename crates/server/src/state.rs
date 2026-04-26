@@ -2,7 +2,7 @@
 //! lazily so external tools (ddb_poll.py, manual edits) can still see/modify it.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -133,7 +133,8 @@ impl AppState {
             serde_json::to_vec_pretty(&serde_json::json!({
                 "session_id": g.session_id,
                 "session_mode": g.session_mode,
-            })).unwrap_or_default(),
+            }))
+            .unwrap_or_default(),
         );
     }
 
@@ -167,7 +168,9 @@ impl AppState {
         if let Err(e) = (|| -> std::io::Result<()> {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
-                .create(true).append(true).open(&path)?;
+                .create(true)
+                .append(true)
+                .open(&path)?;
             f.write_all(line.as_bytes())?;
             f.write_all(b"\n")?;
             Ok(())
@@ -272,7 +275,12 @@ impl AppState {
     }
 
     pub async fn set_panel(&self, name: &str, body: String) {
-        self.inner.data.write().await.panels.insert(name.into(), body);
+        self.inner
+            .data
+            .write()
+            .await
+            .panels
+            .insert(name.into(), body);
     }
 }
 
@@ -302,7 +310,9 @@ fn next_chunk_seq(audio_dir: &PathBuf) -> u64 {
             if let Some(rest) = name.strip_prefix("chunk-") {
                 if let Some(num) = rest.split('.').next() {
                     if let Ok(n) = num.parse::<u64>() {
-                        if n > max { max = n; }
+                        if n > max {
+                            max = n;
+                        }
                     }
                 }
             }
@@ -312,11 +322,15 @@ fn next_chunk_seq(audio_dir: &PathBuf) -> u64 {
 }
 
 /// Resume from prior session.json + transcript.md + state.json + panels/.
-fn read_existing(session_dir: &PathBuf) -> (String, String, StateJson, Panels) {
+fn read_existing(session_dir: &Path) -> (String, String, StateJson, Panels) {
     let session_id = std::fs::read_to_string(session_dir.join("session.json"))
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("session_id").and_then(|x| x.as_str()).map(String::from))
+        .and_then(|v| {
+            v.get("session_id")
+                .and_then(|x| x.as_str())
+                .map(String::from)
+        })
         .unwrap_or_default();
     let transcript = std::fs::read_to_string(session_dir.join("transcript.md")).unwrap_or_default();
     let state = std::fs::read_to_string(session_dir.join("state.json"))

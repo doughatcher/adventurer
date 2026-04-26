@@ -51,8 +51,12 @@ enum Request {
     },
 }
 
-fn default_format() -> String { "webm".into() }
-fn default_language() -> String { "en".into() }
+fn default_format() -> String {
+    "webm".into()
+}
+fn default_language() -> String {
+    "en".into()
+}
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -96,8 +100,7 @@ struct Job {
     reply: mpsc::SyncSender<JobResult>,
 }
 
-type JobResult =
-    anyhow::Result<(String, adventurer_inference_stt::TranscribeMetrics)>;
+type JobResult = anyhow::Result<(String, adventurer_inference_stt::TranscribeMetrics)>;
 
 pub async fn run(opts: WorkerOpts) -> Result<()> {
     let WorkerOpts { model, threads } = opts;
@@ -128,7 +131,9 @@ pub async fn run(opts: WorkerOpts) -> Result<()> {
         })
         .context("spawn engine thread")?;
 
-    ready_rx.recv().context("engine thread died before ready")??;
+    ready_rx
+        .recv()
+        .context("engine thread died before ready")??;
     eprintln!("[stt-worker] model loaded, ready");
 
     write_json(&Response::Ready {
@@ -226,11 +231,19 @@ pub async fn run(opts: WorkerOpts) -> Result<()> {
 async fn ffmpeg_decode_pcm_from_path(audio_path: &std::path::Path) -> Result<Vec<f32>> {
     let mut child = tokio::process::Command::new("ffmpeg")
         .args([
-            "-hide_banner", "-loglevel", "error",
-            "-i", audio_path.to_str().ok_or_else(|| anyhow!("non-utf8 path"))?,
-            "-ar", "16000",     // resample to 16 kHz
-            "-ac", "1",         // mono
-            "-f", "f32le",      // raw 32-bit float little-endian
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            audio_path
+                .to_str()
+                .ok_or_else(|| anyhow!("non-utf8 path"))?,
+            "-ar",
+            "16000", // resample to 16 kHz
+            "-ac",
+            "1", // mono
+            "-f",
+            "f32le", // raw 32-bit float little-endian
             "pipe:1",
         ])
         .stdin(Stdio::null())
@@ -238,8 +251,14 @@ async fn ffmpeg_decode_pcm_from_path(audio_path: &std::path::Path) -> Result<Vec
         .stderr(Stdio::piped())
         .spawn()
         .context("spawn ffmpeg (is it installed?)")?;
-    let mut stdout = child.stdout.take().ok_or_else(|| anyhow!("no ffmpeg stdout"))?;
-    let mut stderr = child.stderr.take().ok_or_else(|| anyhow!("no ffmpeg stderr"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("no ffmpeg stdout"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("no ffmpeg stderr"))?;
     let mut bytes = Vec::with_capacity(16_000 * 4 * 30);
     let mut err = String::new();
     let (read_res, err_res) = tokio::join!(
@@ -267,13 +286,20 @@ async fn ffmpeg_decode_pcm_from_path(audio_path: &std::path::Path) -> Result<Vec
 async fn ffmpeg_decode_pcm(audio: &[u8], format: &str) -> Result<Vec<f32>> {
     let mut child = tokio::process::Command::new("ffmpeg")
         .args([
-            "-hide_banner", "-loglevel", "error",
-            "-f", format,         // input format hint
-            "-i", "pipe:0",       // input from stdin
-            "-ar", "16000",       // resample to 16 kHz
-            "-ac", "1",           // mono
-            "-f", "f32le",        // raw 32-bit float little-endian
-            "pipe:1",             // stdout
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            format, // input format hint
+            "-i",
+            "pipe:0", // input from stdin
+            "-ar",
+            "16000", // resample to 16 kHz
+            "-ac",
+            "1", // mono
+            "-f",
+            "f32le",  // raw 32-bit float little-endian
+            "pipe:1", // stdout
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -281,9 +307,18 @@ async fn ffmpeg_decode_pcm(audio: &[u8], format: &str) -> Result<Vec<f32>> {
         .spawn()
         .context("spawn ffmpeg (is it installed?)")?;
 
-    let mut stdin = child.stdin.take().ok_or_else(|| anyhow!("no ffmpeg stdin"))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| anyhow!("no ffmpeg stdout"))?;
-    let mut stderr = child.stderr.take().ok_or_else(|| anyhow!("no ffmpeg stderr"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("no ffmpeg stdin"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("no ffmpeg stdout"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("no ffmpeg stderr"))?;
 
     // Concurrently: feed bytes on stdin, drain PCM from stdout, capture stderr.
     // No tokio::spawn — that needs 'static and our `audio` is borrowed. join!

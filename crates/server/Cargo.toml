@@ -39,5 +39,12 @@ tracing    = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # No GPU features — server doesn't link inference. Workers carry the GPU bits.
+# These flags exist as forward-looking labels so /health can report which
+# backend the BUNDLE was compiled for (cuda/vulkan/metal/cpu) once we start
+# shipping single-binary builds. They're no-op build flags today —
+# `cfg_backend()` reads them to populate /health's `backend` field.
 [features]
 default = []
+cuda    = []
+vulkan  = []
+metal   = []

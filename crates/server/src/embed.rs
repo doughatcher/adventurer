@@ -32,16 +32,24 @@ pub struct PlayerAssets;
 /// Asset kinds — picks the right subfolder when reading from the on-disk
 /// dev-assets dir.
 #[derive(Clone, Copy)]
-enum Kind { Dm, Player }
+enum Kind {
+    Dm,
+    Player,
+}
 
 fn dev_root() -> Option<PathBuf> {
-    std::env::var("ADVENTURER_DEV_ASSETS").ok().map(PathBuf::from)
+    std::env::var("ADVENTURER_DEV_ASSETS")
+        .ok()
+        .map(PathBuf::from)
 }
 
 /// Look up an asset by name, dev-asset filesystem first, then rust-embed.
 fn get_asset(kind: Kind, name: &str) -> Option<Cow<'static, [u8]>> {
     if let Some(root) = dev_root() {
-        let sub = match kind { Kind::Dm => "client", Kind::Player => "player" };
+        let sub = match kind {
+            Kind::Dm => "client",
+            Kind::Player => "player",
+        };
         let p = root.join(sub).join(name);
         if let Ok(bytes) = std::fs::read(&p) {
             tracing::debug!(path = %p.display(), "dev asset hit");
@@ -49,7 +57,7 @@ fn get_asset(kind: Kind, name: &str) -> Option<Cow<'static, [u8]>> {
         }
     }
     let file = match kind {
-        Kind::Dm     => DmAssets::get(name),
+        Kind::Dm => DmAssets::get(name),
         Kind::Player => PlayerAssets::get(name),
     };
     file.map(|f| f.data)
@@ -65,7 +73,10 @@ pub async fn index() -> impl IntoResponse {
         Some(bytes) => {
             let mut html = String::from_utf8_lossy(bytes.as_ref()).into_owned();
             let ts = chrono::Utc::now().timestamp();
-            html = html.replace("/static/style.css\"", &format!("/static/style.css?v={ts}\""));
+            html = html.replace(
+                "/static/style.css\"",
+                &format!("/static/style.css?v={ts}\""),
+            );
             html = html.replace("/static/stage.js\"", &format!("/static/stage.js?v={ts}\""));
             let inject = format!(
                 concat!(
@@ -80,11 +91,15 @@ pub async fn index() -> impl IntoResponse {
             html = html.replace("</body>", &inject);
             (
                 [
-                    (header::CONTENT_TYPE,  "text/html; charset=utf-8".to_string()),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate".to_string()),
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+                    (
+                        header::CACHE_CONTROL,
+                        "no-cache, no-store, must-revalidate".to_string(),
+                    ),
                 ],
                 html,
-            ).into_response()
+            )
+                .into_response()
         }
         None => (StatusCode::NOT_FOUND, "index.html not found").into_response(),
     }
@@ -98,16 +113,27 @@ pub async fn player_index() -> impl IntoResponse {
         Some(bytes) => {
             let mut html = String::from_utf8_lossy(bytes.as_ref()).into_owned();
             let ts = chrono::Utc::now().timestamp();
-            html = html.replace("/static/player.css\"", &format!("/static/player.css?v={ts}\""));
-            html = html.replace("/static/player.js\"",  &format!("/static/player.js?v={ts}\""));
+            html = html.replace(
+                "/static/player.css\"",
+                &format!("/static/player.css?v={ts}\""),
+            );
+            html = html.replace(
+                "/static/player.js\"",
+                &format!("/static/player.js?v={ts}\""),
+            );
             // Inject dev-reload.js so iPad / phone clients also reload when
             // an asset changes in dev mode.
-            html = html.replace("</body>",
-                &format!("<script src=\"/static/dev-reload.js?v={ts}\" defer></script>\n</body>"));
+            html = html.replace(
+                "</body>",
+                &format!("<script src=\"/static/dev-reload.js?v={ts}\" defer></script>\n</body>"),
+            );
             (
                 [
-                    (header::CONTENT_TYPE,  "text/html; charset=utf-8".to_string()),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate".to_string()),
+                    (header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+                    (
+                        header::CACHE_CONTROL,
+                        "no-cache, no-store, must-revalidate".to_string(),
+                    ),
                 ],
                 html,
             )
@@ -119,17 +145,20 @@ pub async fn player_index() -> impl IntoResponse {
 
 /// `/static/{*path}` handler. DM assets first, then player assets.
 pub async fn static_file(AxumPath(path): AxumPath<String>) -> Response {
-    let bytes = get_asset(Kind::Dm, path.as_str())
-        .or_else(|| get_asset(Kind::Player, path.as_str()));
+    let bytes =
+        get_asset(Kind::Dm, path.as_str()).or_else(|| get_asset(Kind::Player, path.as_str()));
     match bytes {
         Some(b) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
             (
                 [
-                    (header::CONTENT_TYPE,  mime.as_ref().to_string()),
+                    (header::CONTENT_TYPE, mime.as_ref().to_string()),
                     // Always no-cache so dev-mode edits + cache-busted versions
                     // are both honored without browser confusion.
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate".to_string()),
+                    (
+                        header::CACHE_CONTROL,
+                        "no-cache, no-store, must-revalidate".to_string(),
+                    ),
                 ],
                 Body::from(b.into_owned()),
             )

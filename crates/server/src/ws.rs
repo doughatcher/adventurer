@@ -37,7 +37,7 @@ async fn handle_socket(socket: WebSocket, ctx: Arc<AppContext>) {
         state: snap.state,
     };
     if let Ok(text) = serde_json::to_string(&init) {
-        if sender.send(Message::Text(text.into())).await.is_err() {
+        if sender.send(Message::Text(text)).await.is_err() {
             return;
         }
     }
@@ -50,7 +50,7 @@ async fn handle_socket(socket: WebSocket, ctx: Arc<AppContext>) {
             ev = events.recv() => match ev {
                 Ok(ev) => {
                     let Ok(text) = serde_json::to_string(&ev) else { continue };
-                    if sender.send(Message::Text(text.into())).await.is_err() {
+                    if sender.send(Message::Text(text)).await.is_err() {
                         debug!("ws client disconnected (send failed)");
                         break;
                     }

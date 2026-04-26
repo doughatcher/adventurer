@@ -17,7 +17,10 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "PoC bench: STT via in-process whisper.cpp vs Speaches HTTP")]
+#[command(
+    version,
+    about = "PoC bench: STT via in-process whisper.cpp vs Speaches HTTP"
+)]
 struct Args {
     /// Path to a whisper.cpp GGML model file.
     #[arg(long, default_value = "models/ggml-medium.bin")]
@@ -53,8 +56,9 @@ struct Args {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,adventurer_inference=info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("warn,adventurer_inference=info")
+            }),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -78,7 +82,10 @@ async fn main() -> Result<()> {
     eprintln!("audio:   {} bytes on disk", raw_bytes.len());
 
     let (transcript, audio_secs, elapsed_secs) = if args.speaches {
-        eprintln!("backend: speaches @ {} ({})", args.speaches_base, args.speaches_model);
+        eprintln!(
+            "backend: speaches @ {} ({})",
+            args.speaches_base, args.speaches_model
+        );
         run_speaches(&args, &args.audio, &raw_bytes).await?
     } else {
         eprintln!("backend: in-process whisper-rs");
@@ -118,11 +125,18 @@ async fn ffmpeg_decode_pcm(audio_path: &PathBuf) -> Result<Vec<f32>> {
     let mut child = Command::new("ffmpeg")
         .args([
             "-hide_banner",
-            "-loglevel", "error",
-            "-i", audio_path.to_str().ok_or_else(|| anyhow!("non-utf8 path"))?,
-            "-ar", "16000",
-            "-ac", "1",
-            "-f", "f32le",
+            "-loglevel",
+            "error",
+            "-i",
+            audio_path
+                .to_str()
+                .ok_or_else(|| anyhow!("non-utf8 path"))?,
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "f32le",
             "-",
         ])
         .stdout(Stdio::piped())
@@ -130,7 +144,10 @@ async fn ffmpeg_decode_pcm(audio_path: &PathBuf) -> Result<Vec<f32>> {
         .spawn()
         .context("spawn ffmpeg (is it installed?)")?;
 
-    let mut stdout = child.stdout.take().ok_or_else(|| anyhow!("no ffmpeg stdout"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("no ffmpeg stdout"))?;
     let mut bytes = Vec::with_capacity(16_000 * 4 * 60);
     stdout.read_to_end(&mut bytes).await?;
     let status = child.wait().await?;
@@ -197,10 +214,15 @@ async fn run_speaches(
 async fn ffprobe_duration(audio_path: &PathBuf) -> Result<f64> {
     let out = Command::new("ffprobe")
         .args([
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=nw=1:nk=1",
-            audio_path.to_str().ok_or_else(|| anyhow!("non-utf8 path"))?,
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            audio_path
+                .to_str()
+                .ok_or_else(|| anyhow!("non-utf8 path"))?,
         ])
         .output()
         .await?;

@@ -1,0 +1,68 @@
+# CI for the SERVER crate only (the always-fast surface).
+#
+# We deliberately skip the inference crates (`adventurer-inference-{llm,stt}`,
+# `adventurer-llm-bench`, `adventurer-stt-bench`) here because they vendor
+# llama.cpp + whisper.cpp via cmake — full workspace builds take 10+ min on
+# CI hardware and need a CUDA / Vulkan toolchain we don't want to install
+# every push. Their build is exercised by the release workflow on tag push.
+#
+# What this catches:
+#   - rustfmt drift across the workspace (cheap — runs in seconds)
+#   - clippy regressions in the server crate (the bulk of the code we own)
+#   - unit-test regressions (parse_panels, is_whisper_hallucination, slugify,
+#     mime_to_ffmpeg_format, extract_first_json_object — all the pure functions
+#     that have already had bugs)
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Manual run from the Actions tab — useful when iterating on a workflow.
+  workflow_dispatch:
+
+# Don't keep stacking jobs from rapid pushes — supersede the in-flight one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # rustfmt is workspace-wide — it doesn't pull C++ deps, so doing the
+      # whole workspace here is fine and catches drift in the inference
+      # crates too.
+      - name: cargo fmt --check (workspace)
+        run: cargo fmt --all -- --check
+
+  clippy-and-test:
+    name: clippy + test (server only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Only cache the server's deps — saves cache write churn since
+          # we don't build inference crates here.
+          workspaces: ". -> target"
+
+      - name: cargo clippy -p adventurer-server (-D warnings)
+        run: cargo clippy -p adventurer-server --all-targets -- -D warnings
+
+      - name: cargo test -p adventurer-server
+        run: cargo test -p adventurer-server --no-fail-fast

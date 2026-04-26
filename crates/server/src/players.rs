@@ -59,7 +59,11 @@ impl Players {
         entry.clone()
     }
 
-    pub async fn assign_character(&self, token: &str, character: Option<String>) -> Option<PlayerInfo> {
+    pub async fn assign_character(
+        &self,
+        token: &str,
+        character: Option<String>,
+    ) -> Option<PlayerInfo> {
         let mut g = self.inner.write().await;
         let entry = g.get_mut(token)?;
         entry.character = character;

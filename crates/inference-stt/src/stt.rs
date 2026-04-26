@@ -87,7 +87,7 @@ impl SttEngine {
         }
         // Suppress non-speech token outputs ([silence], [music], etc.).
         params.set_suppress_blank(true);
-        params.set_suppress_nst(true);     // suppress non-speech tokens
+        params.set_suppress_nst(true); // suppress non-speech tokens
 
         let t = Instant::now();
         state.full(params, pcm).context("whisper full() decode")?;

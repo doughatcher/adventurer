@@ -1,5 +1,15 @@
 //! adventurer — single-binary live D&D session companion.
 //!
+//! ## Lint policy
+//!
+//! `dead_code` is allowed crate-wide because we keep several
+//! intentionally-vestigial public APIs around for symmetry / future use
+//! (e.g. `SttWorker::transcribe` is the in-process-bytes alternative to
+//! the on-disk `transcribe_path` we currently call; we want both
+//! callable when the never-delete archive constraint relaxes). The
+//! cost of a few "never used" warnings is lower than losing the
+//! signal-to-noise of the rest of clippy.
+//!
 //! Layout at runtime:
 //!
 //!   main task ─┬─ axum on 0.0.0.0:3200
@@ -13,6 +23,8 @@
 //!              ├─ STT worker child process (adventurer-stt-bench --worker)
 //!              │
 //!              └─ gemma update loops (state debounce 6s, panel debounce 12s)
+
+#![allow(dead_code)]
 
 mod api;
 mod config;
@@ -65,7 +77,11 @@ struct Args {
     stt_worker: Option<PathBuf>,
 
     /// LLM model file.
-    #[arg(long, env = "LLM_MODEL", default_value = "/models/gemma-4-E4B-it-Q4_K_M.gguf")]
+    #[arg(
+        long,
+        env = "LLM_MODEL",
+        default_value = "/models/gemma-4-E4B-it-Q4_K_M.gguf"
+    )]
     llm_model: PathBuf,
 
     /// STT model file.
@@ -207,7 +223,10 @@ async fn main() -> Result<()> {
         .route("/api/state", get(api::get_state))
         .route("/api/voice", post(api::post_voice))
         .route("/api/update", post(api::post_update))
-        .route("/api/characters", get(api::list_characters).post(api::add_character))
+        .route(
+            "/api/characters",
+            get(api::list_characters).post(api::add_character),
+        )
         .route("/api/characters/:slug", patch(api::patch_character))
         .route("/api/sessions", get(api::list_sessions))
         .route("/api/sessions/:ts", get(api::get_session))
@@ -215,15 +234,21 @@ async fn main() -> Result<()> {
         .route("/api/lan-info", get(api::get_lan_info))
         .route("/api/players", get(api::list_players))
         .route("/api/players/announce", post(api::announce_player))
-        .route("/api/players/:token/assign", post(api::assign_player_character))
+        .route(
+            "/api/players/:token/assign",
+            post(api::assign_player_character),
+        )
         .route("/api/config", get(api::get_config).post(api::set_config))
-        .route("/api/session/save",  post(api::save_session))
-        .route("/api/session",       get(api::get_session_info))
+        .route("/api/session/save", post(api::save_session))
+        .route("/api/session", get(api::get_session_info))
         .route("/api/session/start", post(api::start_session))
-        .route("/api/session/mode",  post(api::set_session_mode))
-        .route("/api/session/load",  post(api::load_session))
-        .route("/api/adventure-log/sessions", get(api::list_adventure_log_sessions))
-        .route("/api/debug/input",   post(api::log_input_debug))
+        .route("/api/session/mode", post(api::set_session_mode))
+        .route("/api/session/load", post(api::load_session))
+        .route(
+            "/api/adventure-log/sessions",
+            get(api::list_adventure_log_sessions),
+        )
+        .route("/api/debug/input", post(api::log_input_debug))
         .route("/ws", get(ws::ws_handler))
         .route("/static/*path", get(embed::static_file))
         .with_state(ctx)
@@ -310,12 +335,16 @@ fn spawn_dev_asset_watcher(path: String, app: state::AppState) {
         .with_compare_contents(false); // mtime is enough; cheaper.
     let mut watcher: PollWatcher = match PollWatcher::new(
         move |res: notify::Result<notify::Event>| {
-            if res.is_err() { return; }
+            if res.is_err() {
+                return;
+            }
             // Debounce — file editors often fire several events per save
             // (write, chmod, rename); collapse to one reload per ~500ms.
             let mut last = last_fire.lock().unwrap();
             let now = Instant::now();
-            if now.duration_since(*last) < Duration::from_millis(500) { return; }
+            if now.duration_since(*last) < Duration::from_millis(500) {
+                return;
+            }
             *last = now;
             tracing::info!("dev-asset change detected → broadcasting reload");
             app_for_cb.broadcast(state::Event::DevReload {});
@@ -323,7 +352,10 @@ fn spawn_dev_asset_watcher(path: String, app: state::AppState) {
         cfg,
     ) {
         Ok(w) => w,
-        Err(e) => { tracing::warn!(?e, "dev watcher init failed"); return; }
+        Err(e) => {
+            tracing::warn!(?e, "dev watcher init failed");
+            return;
+        }
     };
     if let Err(e) = watcher.watch(std::path::Path::new(&path), RecursiveMode::Recursive) {
         tracing::warn!(?e, "dev watcher watch() failed");
@@ -333,7 +365,9 @@ fn spawn_dev_asset_watcher(path: String, app: state::AppState) {
     // Keep `watcher` in scope (dropping it would unsubscribe from the OS
     // notifications). Park forever; the parent process exit kills the thread.
     let _keepalive = watcher;
-    loop { std::thread::park(); }
+    loop {
+        std::thread::park();
+    }
 }
 
 async fn shutdown_signal() {

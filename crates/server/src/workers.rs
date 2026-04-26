@@ -57,7 +57,7 @@ impl Worker {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())  // worker logs flow into our stderr
+            .stderr(Stdio::inherit()) // worker logs flow into our stderr
             .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("spawn {name} worker ({program})"))?;
@@ -105,7 +105,10 @@ impl Worker {
                 if let Some(tx) = pending.remove(&id) {
                     let _ = tx.send(v);
                 } else {
-                    warn!(worker = name_for_reader, id, "response with no pending request");
+                    warn!(
+                        worker = name_for_reader,
+                        id, "response with no pending request"
+                    );
                 }
             }
             warn!(worker = name_for_reader, "worker stdout closed");
@@ -124,7 +127,11 @@ impl Worker {
 
         match tokio::time::timeout(std::time::Duration::from_secs(120), worker.ping()).await {
             Ok(Ok(())) => info!(worker = name, "ping/pong OK — worker live"),
-            Ok(Err(e)) => warn!(worker = name, ?e, "ping failed (worker may still be loading)"),
+            Ok(Err(e)) => warn!(
+                worker = name,
+                ?e,
+                "ping failed (worker may still be loading)"
+            ),
             Err(_) => warn!(worker = name, "ping timed out at 120s — model load slow?"),
         }
         Ok(worker)
@@ -192,7 +199,12 @@ impl LlmWorker {
         Ok(Self { inner })
     }
 
-    pub async fn generate(&self, system: &str, prompt: &str, max_tokens: i32) -> Result<GenerateResp> {
+    pub async fn generate(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: i32,
+    ) -> Result<GenerateResp> {
         let v = self
             .inner
             .request(serde_json::json!({
@@ -208,7 +220,7 @@ impl LlmWorker {
 
 #[derive(Debug)]
 pub struct LlmSpawnOpts {
-    pub program: String,    // path to adventurer-llm-bench
+    pub program: String, // path to adventurer-llm-bench
     pub model: PathBuf,
     pub n_ctx: u32,
     pub gpu_layers: u32,
@@ -267,7 +279,12 @@ impl SttWorker {
     /// Legacy path: server writes a tempfile and asks the worker to delete it
     /// after reading. Kept for STT-bench / standalone use; the live server
     /// uses `transcribe_path` for never-delete archiving.
-    pub async fn transcribe(&self, audio: &[u8], format: &str, language: &str) -> Result<TranscribeResp> {
+    pub async fn transcribe(
+        &self,
+        audio: &[u8],
+        format: &str,
+        language: &str,
+    ) -> Result<TranscribeResp> {
         let ext = match format {
             "webm" => "webm",
             "ogg" | "opus" => "ogg",
@@ -276,11 +293,7 @@ impl SttWorker {
             "mp3" | "mpeg" => "mp3",
             _ => "bin",
         };
-        let tmp = std::env::temp_dir().join(format!(
-            "adv-stt-{}.{}",
-            uuid_simple(),
-            ext
-        ));
+        let tmp = std::env::temp_dir().join(format!("adv-stt-{}.{}", uuid_simple(), ext));
         tracing::info!(path = %tmp.display(), bytes = audio.len(), "stt: writing tempfile");
         tokio::fs::write(&tmp, audio).await?;
         tracing::info!("stt: sending request to worker");

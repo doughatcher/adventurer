@@ -1,0 +1,202 @@
+# Release builds — fired on tag push (`git tag v0.0.1 && git push --tags`).
+#
+# Two-platform matrix: linux-x86_64 (definite) and windows-x86_64 (best-effort).
+# Both build CPU-only — GPU backends (CUDA / Vulkan / Metal) need toolchains
+# that aren't present on standard GitHub-hosted runners. Once we have a self-
+# hosted runner with NVIDIA drivers we can add a cuda matrix entry.
+#
+# Each platform produces an archive containing:
+#
+#   adventurer{,.exe}             ← server binary
+#   adventurer-llm-bench{,.exe}   ← LLM worker (--worker mode = stdin/out JSON)
+#   adventurer-stt-bench{,.exe}   ← STT worker
+#   assets/                        ← (already embedded into the server, kept as a
+#                                    convenience copy for dev-mode mounting)
+#   prompts/state.txt              ← LLM state-extraction prompt
+#   scripts/launch.sh              ← reference launcher (Linux only)
+#   README.md                      ← so a fresh download is self-explanatory
+#
+# What's NOT included: model weights. gemma-4-E4B-it-Q4_K_M.gguf (~3 GB) and
+# ggml-medium.bin (~1.5 GB) are too big for a GitHub release artifact, and
+# users will want to pick their own quant level anyway. The Steamworks plan
+# is to ship them via a content depot — see README "Vision" section.
+#
+# Allowing Windows to fail (continue-on-error: true) so a Linux release still
+# ships even if MSVC / cmake on windows-latest is broken on a given day —
+# common reality for Rust projects with C++ build deps.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.0.1). Must already exist."
+        required: true
+
+permissions:
+  contents: write   # needed to create the GitHub release
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow-fail }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            archive_ext: tar.gz
+            exe_ext: ""
+            allow-fail: false
+          - os: windows-latest
+            target: windows-x86_64
+            archive_ext: zip
+            exe_ext: ".exe"
+            allow-fail: true   # MSVC + cmake on windows-latest is sometimes flaky
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      # llama.cpp + whisper.cpp need cmake. ubuntu-latest has it preinstalled
+      # (and build-essential too) but be explicit so a runner image change
+      # doesn't silently break us.
+      - name: install build deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential pkg-config
+
+      # windows-latest has cmake + MSVC via Visual Studio Build Tools. Keep
+      # this step explicit so we notice if the runner image stops shipping it.
+      - name: confirm build deps (windows)
+        if: runner.os == 'Windows'
+        run: |
+          cmake --version
+          cl 2>&1 | Select-Object -First 1
+        shell: pwsh
+
+      - name: build server + workers (CPU release)
+        run: |
+          cargo build --release -p adventurer-server
+          cargo build --release -p adventurer-llm-bench
+          cargo build --release -p adventurer-stt-bench
+
+      - name: smoke-test the server binary (--no-workers)
+        if: runner.os == 'Linux'
+        run: |
+          ./target/release/adventurer --help
+          # Quick sanity boot: --no-workers means just /health, no inference,
+          # no model loading. Should respond on /health within seconds.
+          ./target/release/adventurer --no-workers --port 38210 \
+            --session-dir "$(mktemp -d)" &
+          SERVER_PID=$!
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:38210/health >/dev/null 2>&1; then
+              echo "smoke ok"; break
+            fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:38210/health
+          kill $SERVER_PID 2>/dev/null || true
+
+      # ─── package ──────────────────────────────────────────────────────
+      - name: stage release dir (linux)
+        if: runner.os == 'Linux'
+        run: |
+          DIR="adventurer-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$DIR"
+          cp target/release/adventurer "$DIR/"
+          cp target/release/adventurer-llm-bench "$DIR/"
+          cp target/release/adventurer-stt-bench "$DIR/"
+          cp -r crates/server/assets "$DIR/assets"
+          cp -r prompts "$DIR/prompts"
+          cp scripts/launch.sh "$DIR/launch.sh"
+          cp README.md "$DIR/README.md"
+          cp LICENSE "$DIR/LICENSE"
+          tar -czf "${DIR}.tar.gz" "$DIR"
+          ls -lh "${DIR}.tar.gz"
+          echo "ARCHIVE=${DIR}.tar.gz" >> $GITHUB_ENV
+
+      - name: stage release dir (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $DIR = "adventurer-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $DIR | Out-Null
+          Copy-Item target/release/adventurer.exe $DIR/
+          Copy-Item target/release/adventurer-llm-bench.exe $DIR/
+          Copy-Item target/release/adventurer-stt-bench.exe $DIR/
+          Copy-Item -Recurse crates/server/assets "$DIR/assets"
+          Copy-Item -Recurse prompts "$DIR/prompts"
+          Copy-Item README.md "$DIR/README.md"
+          Copy-Item LICENSE "$DIR/LICENSE"
+          Compress-Archive -Path "$DIR/*" -DestinationPath "$DIR.zip"
+          Get-ChildItem "$DIR.zip"
+          "ARCHIVE=$DIR.zip" >> $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: adventurer-${{ github.ref_name }}-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: publish github release
+    needs: build
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: list collected artifacts
+        run: ls -lhR artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          # Pre-release tags (v0.0.x) are flagged as such — bump to >=v1.0.0
+          # to ship as a stable release.
+          tag_name: ${{ github.ref_name || inputs.tag }}
+          prerelease: ${{ startsWith(github.ref_name, 'v0.') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+          body: |
+            adventurer ${{ github.ref_name }}
+
+            Pre-release CPU-only build for Linux x86_64 and Windows x86_64.
+
+            ## Contents (per archive)
+            - `adventurer{,.exe}` — server (axum + WebSocket, port 3210)
+            - `adventurer-llm-bench{,.exe}` — LLM worker (run with `--worker`)
+            - `adventurer-stt-bench{,.exe}` — STT worker (run with `--worker`)
+            - `assets/` — DM stage + player UI (also embedded in the server)
+            - `prompts/state.txt` — LLM state-extraction prompt
+            - `launch.sh` — reference launcher (Linux only)
+
+            ## Not included (you supply)
+            - LLM model — `gemma-4-E4B-it-Q4_K_M.gguf` (~3 GB)
+            - STT model — `ggml-medium.bin` (~1.5 GB)
+
+            See README for setup details. Models will ship via Steamworks
+            depot once we hit early access.

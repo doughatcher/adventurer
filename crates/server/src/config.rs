@@ -84,17 +84,29 @@ impl ConfigStore {
     }
 
     /// Update fields. `pat` of `Some("")` clears it; `None` leaves it as-is.
-    pub async fn update(&self, repo: Option<String>, branch: Option<String>, pat: Option<String>) -> Result<()> {
+    pub async fn update(
+        &self,
+        repo: Option<String>,
+        branch: Option<String>,
+        pat: Option<String>,
+    ) -> Result<()> {
         let mut g = self.inner.write().await;
-        if let Some(r) = repo { g.repo = if r.is_empty() { None } else { Some(r) }; }
-        if let Some(b) = branch { g.branch = if b.is_empty() { None } else { Some(b) }; }
-        if let Some(p) = pat { g.pat = if p.is_empty() { None } else { Some(p) }; }
+        if let Some(r) = repo {
+            g.repo = if r.is_empty() { None } else { Some(r) };
+        }
+        if let Some(b) = branch {
+            g.branch = if b.is_empty() { None } else { Some(b) };
+        }
+        if let Some(p) = pat {
+            g.pat = if p.is_empty() { None } else { Some(p) };
+        }
         // Persist (chmod 600 — secret on disk).
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).ok();
         }
         let json = serde_json::to_string_pretty(&*g)?;
-        std::fs::write(&self.path, json).with_context(|| format!("write {}", self.path.display()))?;
+        std::fs::write(&self.path, json)
+            .with_context(|| format!("write {}", self.path.display()))?;
         chmod_600(&self.path).ok();
         Ok(())
     }
@@ -109,4 +121,6 @@ fn chmod_600(path: &PathBuf) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn chmod_600(_path: &PathBuf) -> std::io::Result<()> { Ok(()) }
+fn chmod_600(_path: &PathBuf) -> std::io::Result<()> {
+    Ok(())
+}
