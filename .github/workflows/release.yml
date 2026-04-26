@@ -80,8 +80,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake build-essential pkg-config
 
-      # windows-latest has cmake + MSVC via Visual Studio Build Tools. Keep
-      # this step explicit so we notice if the runner image stops shipping it.
+      # windows-latest ships MSVC via Visual Studio Build Tools, but `cl.exe`
+      # isn't on PATH by default — you have to source vcvarsall.bat to get
+      # it. ilammy/msvc-dev-cmd does exactly that AND propagates the
+      # resulting PATH/INCLUDE/LIB into subsequent steps.
+      # https://github.com/ilammy/msvc-dev-cmd
+      - name: setup MSVC env (windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: confirm build deps (windows)
         if: runner.os == 'Windows'
         run: |
