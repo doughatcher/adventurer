@@ -13,6 +13,27 @@
   const $ = id => document.getElementById(id);
   const enc = encodeURIComponent;
 
+  // ─── Desktop-Site honors hint ──────────────────────────────────────
+  // If iPad/iPhone has "Request Desktop Site" enabled, navigator.userAgent
+  // is spoofed to look like macOS Safari — there's no Mobile / iPad token
+  // in the UA. The reliable feature-detect: macOS UA + touch input.
+  // Honor the hint by sending the user to / (the DM stage), which is
+  // designed for full-screen desktop layouts. Users can override with
+  // ?force=mobile in the URL.
+  const params = new URLSearchParams(location.search);
+  if (params.get('force') !== 'mobile') {
+    const looksDesktopSite = /Macintosh/.test(navigator.userAgent)
+                           && navigator.maxTouchPoints > 1
+                           && navigator.vendor === 'Apple Computer, Inc.';
+    if (looksDesktopSite) {
+      // Preserve any query params the join URL was carrying (e.g. invite codes).
+      const dest = '/' + (location.search || '');
+      // history.replace so back button doesn't bounce them right back to /join.
+      location.replace(dest);
+      return;  // halt the rest of player.js — we're navigating away.
+    }
+  }
+
   // ─── token / identity ───
   const TOKEN_KEY = 'adv-player-token';
   function getToken() {
@@ -521,14 +542,36 @@
     recSecs.textContent = `${mm}:${ss}${pip}` + (inflight > 0 ? '  ⤴' : '') + skipped;
   }
 
+  // Apple-Safari detection that survives "Request Desktop Site" (which
+  // spoofs the UA to look like Mac Chrome). navigator.vendor stays
+  // 'Apple Computer, Inc.' on every Apple browser even with desktop UA.
+  function isAppleSafari() {
+    return navigator.vendor === 'Apple Computer, Inc.';
+  }
+
   function pickMime() {
-    const candidates = [
+    // iOS Safari (and recent macOS Safari) reports `audio/webm` as
+    // supported via isTypeSupported() — but actually using it produces
+    // chunks ffmpeg/whisper can't decode (silent + chunks_seen growing,
+    // uploaded=0 if the upload code happens to fail downstream). Safari
+    // produces correct `audio/mp4` though, so prefer that on Apple
+    // browsers. Other browsers prefer webm/opus which is the best codec
+    // whisper handles.
+    const safariCandidates = [
+      'audio/mp4',
+      'audio/mp4;codecs=mp4a.40.2',
+      'audio/aac',
+      'audio/webm;codecs=opus',
+      'audio/webm',
+    ];
+    const otherCandidates = [
       'audio/webm;codecs=opus',
       'audio/webm',
       'audio/ogg;codecs=opus',
-      'audio/mp4',                  // Safari / iOS default
+      'audio/mp4',
       'audio/mp4;codecs=mp4a.40.2',
     ];
+    const candidates = isAppleSafari() ? safariCandidates : otherCandidates;
     for (const m of candidates) {
       try { if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
       catch {}
@@ -538,8 +581,18 @@
 
   async function onChunk(evt) {
     chunksSeen++;
-    micLog({ type: 'mic_chunk', n: chunksSeen, bytes: evt.data ? evt.data.size : 0,
-             rec_state: mediaRecorder ? mediaRecorder.state : 'gone' });
+    // Logging is best-effort — wrap so a logger throw can never block the
+    // upload pipeline. (Previous bug: a stale `mediaRecorder` reference
+    // here threw ReferenceError on every chunk, swallowing the upload.
+    // Symptom: chunks_seen=N, uploaded=0, no error visible to the user.)
+    try {
+      micLog({
+        type: 'mic_chunk',
+        n: chunksSeen,
+        bytes: evt.data ? evt.data.size : 0,
+        peak: typeof evt.peak === 'number' ? +evt.peak.toFixed(4) : null,
+      });
+    } catch (e) { /* swallow */ }
     if (!evt.data || !evt.data.size) return;
     const ext = (recMime && recMime.includes('mp4')) ? 'm4a'
               : (recMime && recMime.includes('ogg')) ? 'ogg' : 'webm';

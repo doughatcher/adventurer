@@ -41,6 +41,19 @@ body {
 #hdr-status.connected { background: rgba(105,209,149,.18); color: var(--good); }
 #hdr-status.connecting { background: rgba(244,160,74,.18); color: var(--warn); }
 #hdr-status.disconnected { background: rgba(232,90,90,.18); color: var(--bad); }
+/* Manual escape-hatch to the desktop DM stage. iPad-with-Desktop-Site
+   auto-redirects via player.js; this is for the "I want desktop on my
+   phone" case. */
+#hdr-dm-link {
+  font-size: 12px; font-weight: 500;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--line); color: var(--text2);
+  text-decoration: none;
+  margin-left: 8px;
+}
+#hdr-dm-link:hover, #hdr-dm-link:active {
+  background: rgba(99,168,232,.18); color: var(--accent, #63a8e8);
+}
 
 /* ─── mic record button ─── */
 #rec-btn {
