@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use regex::Regex;
+use futures_util::FutureExt;   // catch_unwind
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{info, warn};
 
@@ -96,8 +96,19 @@ async fn debounced_loop<F, Fut>(
         tokio::time::sleep(debounce).await;
         // drain extra nudges that arrived during the debounce window
         while rx.try_recv().is_ok() {}
-        if let Err(e) = handler().await {
-            warn!(loop_name = name, ?e, "gemma loop handler error");
+        // Catch panics in the handler. A previous bug had `parse_panels`
+        // panic on a regex with lookahead — when that happened the panel
+        // pass tokio task died silently, sender keeps queueing triggers,
+        // no one reading. AssertUnwindSafe is OK here: handler() returns
+        // a fresh Future each iteration; nothing leaks across the catch.
+        let result = std::panic::AssertUnwindSafe(handler())
+            .catch_unwind()
+            .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!(loop_name = name, ?e, "gemma loop handler error"),
+            Err(_) => warn!(loop_name = name,
+                "gemma loop handler PANICKED — caught, loop continues"),
         }
     }
     info!(loop_name = name, "gemma loop exiting");
@@ -243,15 +254,66 @@ fn extract_first_json_object(raw: &str) -> Option<&str> {
     None
 }
 
-/// Parse `## PANEL: name\n…` blocks. Same regex shape as gemma.py.
+/// Parse `## PANEL: name\n…` blocks. Same shape as gemma.py.
+///
+/// Original implementation used a regex with a lookahead
+/// (`(?=\n## PANEL:|\n## DECISION:|\n## STATE:|\z)`) — but Rust's `regex`
+/// crate is RE2-based and **panics** on lookahead. Each panel pass
+/// silently took down the entire panel-pass tokio task, after which
+/// trigger_panel_pass.send() succeeded but no one was reading the rx.
+/// Result: panels permanently stuck on the loaded-from-GitHub baseline,
+/// no extraction happening for the rest of the session.
+///
+/// Reimplemented as a hand-rolled state machine over the lines: locate
+/// each `## PANEL: <name>` header, slurp lines until the NEXT header
+/// (any of `## PANEL:`, `## DECISION:`, `## STATE:`, or end of input)
+/// without any regex at all. No lookahead needed.
 fn parse_panels(text: &str) -> Panels {
-    let re = Regex::new(r"(?ms)^## PANEL:\s*(\S+)\s*\n(.*?)(?=\n## PANEL:|\n## DECISION:|\n## STATE:|\z)")
-        .expect("static regex");
     let mut out = Panels::new();
-    for cap in re.captures_iter(text) {
-        let name = cap[1].to_lowercase();
-        let body = cap[2].trim();
-        out.insert(name.clone(), format!("## PANEL: {name}\n\n{body}"));
+    let mut current_name: Option<String> = None;
+    let mut current_body: Vec<&str> = Vec::new();
+
+    fn is_section_header(line: &str) -> Option<&'static str> {
+        let l = line.trim_start();
+        if l.starts_with("## PANEL:")    { Some("PANEL") }
+        else if l.starts_with("## DECISION:") { Some("DECISION") }
+        else if l.starts_with("## STATE:")    { Some("STATE") }
+        else { None }
     }
+
+    fn finalize(out: &mut Panels, name: Option<String>, body: Vec<&str>) {
+        if let Some(name) = name {
+            // Trim leading + trailing blank lines from the body.
+            let mut start = 0;
+            let mut end = body.len();
+            while start < end && body[start].trim().is_empty() { start += 1; }
+            while end > start && body[end - 1].trim().is_empty() { end -= 1; }
+            let body_str = body[start..end].join("\n");
+            out.insert(name.clone(), format!("## PANEL: {name}\n\n{body_str}"));
+        }
+    }
+
+    for line in text.lines() {
+        if let Some(kind) = is_section_header(line) {
+            // Close out the previous panel (if any).
+            finalize(&mut out, current_name.take(), std::mem::take(&mut current_body));
+            // Start a new panel block only if it's a PANEL header — DECISION
+            // and STATE blocks terminate the previous panel but don't open
+            // a new one.
+            if kind == "PANEL" {
+                // Header format: `## PANEL: name`. Take the part after the colon.
+                let after_colon = line.trim_start()
+                    .trim_start_matches("## PANEL:")
+                    .trim();
+                // Name is the first whitespace-separated token, lowercased.
+                if let Some(first_tok) = after_colon.split_whitespace().next() {
+                    current_name = Some(first_tok.to_lowercase());
+                }
+            }
+        } else if current_name.is_some() {
+            current_body.push(line);
+        }
+    }
+    finalize(&mut out, current_name, current_body);
     out
 }
