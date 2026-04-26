@@ -581,18 +581,59 @@ pub async fn save_session(
 
 // ─── helpers ───
 
-/// True if Whisper returned a placeholder for "I heard nothing" — the
-/// canonical empty markers. We deliberately keep ambient-sound brackets like
-/// `[paper rustling]` or `[footsteps]` because those ARE real signal.
+/// True if Whisper returned a placeholder for "I heard nothing", OR one of
+/// its notorious YouTube-end-card hallucinations on quiet/empty audio.
+///
+/// Whisper was trained on a lot of YouTube video subtitles; when it's fed
+/// audio that's quiet but not pure silence (mic in a room with no speech,
+/// background music, ambient HVAC noise), it confabulates from the most
+/// common phrases in its training data — "Thank you for watching",
+/// "Subtitles by Amara.org", "Music by Audio Library", etc. These are
+/// pure noise from our perspective and pollute the transcript fast.
+///
+/// We deliberately keep ambient-sound brackets like `[paper rustling]` or
+/// `[footsteps]` — those ARE real signal that whisper actually heard.
 fn is_whisper_hallucination(text: &str) -> bool {
     let t = text.trim();
     let lower = t.to_lowercase();
     // Exact-match common empties (whisper.cpp returns these for silent audio)
-    matches!(lower.as_str(),
+    if matches!(lower.as_str(),
         "[blank_audio]" | "[silence]" | "[inaudible]" | "[no audio]" |
         "[no speech]" | "(silence)" | "(blank_audio)" | "(no audio)" |
-        "[ silence ]" | "blank_audio" | "silence"
-    )
+        "[ silence ]" | "blank_audio" | "silence" | "you" | "."
+    ) {
+        return true;
+    }
+    // Substring match on known YouTube confabulations. Match the whole
+    // (lowercased) chunk because these are typically the ENTIRE output
+    // of a single whisper call. Anything wrapped around real speech in
+    // the same chunk would have other text, so checking the whole
+    // string is a reasonable signal.
+    const YT_HALLUCINATIONS: &[&str] = &[
+        "thank you for watching",
+        "thanks for watching",
+        "thanks for being with us",
+        "subtitles by",
+        "subtitled by",
+        "subscribe to",
+        "like and subscribe",
+        "music by",
+        "video by",
+        "video extract",
+        "edited by",
+        "see you next",
+        "see you in the next",
+        "outro music",
+        "intro music",
+        "amara.org",
+        "the end of the video",
+    ];
+    for needle in YT_HALLUCINATIONS {
+        if lower.contains(needle) {
+            return true;
+        }
+    }
+    false
 }
 
 fn slugify(name: &str) -> String {

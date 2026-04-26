@@ -278,12 +278,36 @@
   let chunksSeen    = 0;
   let chunksUploaded = 0;
   let chunksFailed   = 0;
+  let chunksSkipped  = 0;   // VAD-skipped (silent room tone)
   // Whisper was trained on ~30s clips and accuracy drops sharply below ~10s.
   // 5s was too short — game narration like "Spock shoots the alien for 3
   // damage" was getting lost or replaced with hallucinated boilerplate. 10s
   // gives whisper enough context to anchor on, at the cost of slightly
   // more transcript latency.
   const SLICE_MS    = 10000;
+
+  // ─── Voice activity detection ───
+  // Whisper hallucinates "Thank you for watching" / "Subtitles by…" on
+  // near-silent audio. We solve it at the source: keep an AnalyserNode tap
+  // on the mic, sample its time-domain data ~25× per second across the
+  // whole slice, track the peak normalized amplitude. If the peak never
+  // crossed VAD_THRESHOLD by slice end, we drop the chunk WITHOUT uploading.
+  // The audio is gone (we didn't record to disk on the server side) but
+  // that's fine — there was nothing to capture. URL `?vad=off` disables.
+  //
+  // Threshold tuning: getByteTimeDomainData returns 0..255 with 128 = silence.
+  // Subtracting 128 yields a signed sample; abs/255 normalizes to 0..1.
+  // 0.02 (≈ −34 dBFS) is a good "someone in the room is talking, not just
+  // breathing or HVAC" threshold. Bump to 0.04 if false positives are bad,
+  // drop to 0.012 for "whispering across a quiet table". Override via
+  // `?vad-threshold=0.03` for live tweaks.
+  const VAD_ENABLED   = (new URLSearchParams(location.search).get('vad') !== 'off');
+  const VAD_THRESHOLD = (() => {
+    const q = parseFloat(new URLSearchParams(location.search).get('vad-threshold'));
+    return Number.isFinite(q) && q > 0 ? q : 0.02;
+  })();
+  let audioCtx = null, analyser = null, vadTimer = null;
+  let vadBuf = null, vadPeak = 0;
 
   // Mirror mic-pipeline events to the server log so we can grep for them in
   // `docker logs adventurer-live | grep input_debug` and diagnose without
@@ -344,16 +368,52 @@
       return;
     }
     recMime = pickMime();
-    chunksSeen = chunksUploaded = chunksFailed = 0;
+    chunksSeen = chunksUploaded = chunksFailed = chunksSkipped = 0;
     isRecording = true;
     recStarted = Date.now();
     setRecordingUI(true);
     recTimer = setInterval(updateTimer, 250);
+
+    // Wire up the VAD analyser tap. Same MediaStream as the recorder
+    // (no extra getUserMedia call), so iOS Safari only prompts once.
+    if (VAD_ENABLED) {
+      try {
+        const Ctor = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new Ctor();
+        const src = audioCtx.createMediaStreamSource(mediaStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;          // 512 time-domain samples
+        analyser.smoothingTimeConstant = 0;
+        src.connect(analyser);            // NOT connected to destination — silent
+        vadBuf = new Uint8Array(analyser.fftSize);
+        vadPeak = 0;
+        // Sample every 40ms (~25 Hz). At fftSize=1024 / sampleRate≈48000 each
+        // window covers ~21ms, so 40ms polling sees every chunk of audio
+        // without overlap-induced double-counts.
+        vadTimer = setInterval(() => {
+          if (!analyser) return;
+          analyser.getByteTimeDomainData(vadBuf);
+          // Peak abs deviation from 128 (silence midpoint), normalized 0..1.
+          let peak = 0;
+          for (let i = 0; i < vadBuf.length; i++) {
+            const a = Math.abs(vadBuf[i] - 128);
+            if (a > peak) peak = a;
+          }
+          const norm = peak / 128;
+          if (norm > vadPeak) vadPeak = norm;
+        }, 40);
+      } catch (e) {
+        micLog({ type: 'mic_vad_init_fail', err: String(e) });
+        analyser = null;  // disable for this session, recorder still runs
+      }
+    }
+
     micLog({
       type: 'mic_started',
       pattern: 'stop_restart',
       mime: recMime,
       slice_ms: SLICE_MS,
+      vad: { enabled: VAD_ENABLED, threshold: VAD_THRESHOLD, active: !!analyser },
       tracks: mediaStream.getAudioTracks().map(t => ({
         label: t.label, settings: t.getSettings(),
       })),
@@ -375,6 +435,9 @@
       return;
     }
     let blob = null;
+    // Reset the per-slice peak BEFORE recorder.start() so this slice's
+    // audio energy is what gets measured (not lingering peak from before).
+    vadPeak = 0;
     recorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) blob = e.data;
     };
@@ -382,7 +445,24 @@
       micLog({ type: 'mic_recorder_error', err: String(e && e.error || e) });
     };
     recorder.onstop = async () => {
-      if (blob) await onChunk({ data: blob });
+      // Snapshot the slice peak *before* starting the next slice (which would
+      // reset it). VAD gate: if the peak never crossed threshold, skip the
+      // upload entirely. Whisper would just hallucinate on it.
+      const slicePeak = vadPeak;
+      if (blob) {
+        if (analyser && slicePeak < VAD_THRESHOLD) {
+          chunksSkipped++;
+          micLog({
+            type: 'mic_chunk_skipped_vad',
+            n: chunksSeen + 1,
+            bytes: blob.size,
+            peak: +slicePeak.toFixed(4),
+            threshold: VAD_THRESHOLD,
+          });
+        } else {
+          await onChunk({ data: blob, peak: slicePeak });
+        }
+      }
       if (isRecording) recordOneSlice();   // immediately start next slice
     };
     recorder.start();
@@ -400,11 +480,22 @@
     if (!isRecording) return;
     isRecording = false;
     micLog({ type: 'mic_stopped',
-             chunks_seen: chunksSeen, uploaded: chunksUploaded, failed: chunksFailed });
+             chunks_seen: chunksSeen, uploaded: chunksUploaded,
+             failed: chunksFailed, vad_skipped: chunksSkipped });
     if (mediaStream) {
       mediaStream.getTracks().forEach(t => t.stop());
       mediaStream = null;
     }
+    // Tear down the VAD analyser. Need to close() the AudioContext or
+    // iOS keeps the mic-permission indicator on after the recorder stops.
+    if (vadTimer) { clearInterval(vadTimer); vadTimer = null; }
+    if (audioCtx) {
+      try { audioCtx.close(); } catch {}
+      audioCtx = null;
+    }
+    analyser = null;
+    vadBuf = null;
+    vadPeak = 0;
     setRecordingUI(false);
     clearInterval(recTimer); recTimer = null;
     recSecs.textContent = '';
@@ -419,7 +510,15 @@
     const s = Math.floor((Date.now() - recStarted) / 1000);
     const mm = Math.floor(s / 60).toString();
     const ss = (s % 60).toString().padStart(2, '0');
-    recSecs.textContent = `${mm}:${ss}` + (inflight > 0 ? '  ⤴' : '');
+    // Live VAD pip — green dot if voice currently above threshold (this
+    // 250ms tick), grey dot otherwise. Lets the player verify their mic
+    // is actually picking them up during the game.
+    let pip = '';
+    if (analyser) {
+      pip = vadPeak >= VAD_THRESHOLD ? ' 🟢' : ' ⚪';
+    }
+    let skipped = chunksSkipped > 0 ? ` (skipped ${chunksSkipped})` : '';
+    recSecs.textContent = `${mm}:${ss}${pip}` + (inflight > 0 ? '  ⤴' : '') + skipped;
   }
 
   function pickMime() {
