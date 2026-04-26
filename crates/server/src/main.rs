@@ -15,11 +15,13 @@
 //!              └─ gemma update loops (state debounce 6s, panel debounce 12s)
 
 mod api;
+mod config;
 mod embed;
 mod gemma;
 mod lan;
 mod players;
 mod state;
+mod sync;
 mod workers;
 mod ws;
 
@@ -163,7 +165,15 @@ async fn main() -> Result<()> {
 
     let lan_ip = lan::detect_lan_ip();
     let players = players::Players::new();
-    info!(%lan_ip, port = args.port, "LAN address for QR / join URL");
+    let config_store = config::ConfigStore::load();
+    let cfg_snap = config_store.snapshot().await;
+    info!(
+        %lan_ip,
+        port = args.port,
+        github_repo = ?cfg_snap.repo,
+        github_pat = if cfg_snap.pat.is_some() { "set" } else { "unset" },
+        "server context"
+    );
 
     let ctx = Arc::new(AppContext {
         state: app_state.clone(),
@@ -172,6 +182,7 @@ async fn main() -> Result<()> {
         players,
         lan_ip,
         port: args.port,
+        config: config_store,
         trigger_state_pass: state_tx,
         trigger_panel_pass: panel_tx,
     });
@@ -196,6 +207,8 @@ async fn main() -> Result<()> {
         .route("/api/players", get(api::list_players))
         .route("/api/players/announce", post(api::announce_player))
         .route("/api/players/:token/assign", post(api::assign_player_character))
+        .route("/api/config", get(api::get_config).post(api::set_config))
+        .route("/api/session/save", post(api::save_session))
         .route("/ws", get(ws::ws_handler))
         .route("/static/*path", get(embed::static_file))
         .with_state(ctx);

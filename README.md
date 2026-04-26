@@ -142,6 +142,51 @@ safe to re-run; it replaces any existing entry with the same name.
    then `xdg-open`) in app/fullscreen mode on the URL.
 5. Foreground-waits on the browser PID so Steam tracks playtime correctly.
 
+### Backup to GitHub (the same `adventure-log` content repo)
+
+`adventurer` writes session state to a configured GitHub repo via the REST
+Trees API — atomic single-commit per save, no `git` binary required at
+runtime. Same on-disk layout dnd-stage produces, so the existing GitHub
+Action that generates the Hugo journal sees the new sessions and processes
+them automatically.
+
+**Configure** once via env vars (the launcher passes these through):
+
+```bash
+export ADVENTURER_GITHUB_PAT=<PAT_with_contents:write>
+export ADVENTURER_GITHUB_REPO=doughatcher/adventure-log
+export ADVENTURER_GITHUB_BRANCH=main      # default: main
+```
+
+…or write them through the **Players** modal's "Backup to GitHub" panel
+(persists to `~/.local/share/adventurer/config.json`, chmod 600).
+
+**Save the current session:**
+
+```bash
+curl -X POST http://localhost:3200/api/session/save \
+    -H 'Content-Type: application/json' -d '{}'
+# {"ok":true,"commit_sha":"…","commit_url":"https://github.com/…/commit/…","files":7}
+```
+
+…or click **⤴ Save session now** in the modal.
+
+What gets written:
+
+```
+data/sessions/<id>/
+├── transcript.md        (the running transcript)
+├── state.json           (gemma's structured party/combat state)
+├── scene.md
+├── story-log.md
+├── party.md
+├── next-steps.md
+└── map.md
+```
+
+`<id>` defaults to `YYYY-MM-DD-HHMM`; pass `session_id` in the JSON to override.
+The PAT is never echoed back from `/api/config` (returns `has_pat: bool`).
+
 ### Players join via QR code
 
 Click **♣ Players** in the DM stage header — the modal shows a QR encoding

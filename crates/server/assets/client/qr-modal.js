@@ -85,6 +85,25 @@
       color: #5b6470; font-style: italic; padding: 20px 0;
       text-align: center;
     }
+    .adv-cfg-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+    .adv-cfg-row label {
+      width: 60px; color: #8d96a7; font-size: 12px;
+      text-transform: uppercase; letter-spacing: .06em;
+    }
+    .adv-cfg-row input {
+      flex: 1; background: #0e1116; color: #d6deea;
+      border: 1px solid #2a313c; padding: 6px 10px; border-radius: 6px;
+      font-size: 13px;
+    }
+    .adv-btn {
+      background: #2a313c; color: #d6deea;
+      border: 1px solid #3b4452; border-radius: 6px;
+      padding: 7px 14px; cursor: pointer; font-size: 13px;
+    }
+    .adv-btn.primary { background: rgba(244,185,66,.18); color: #f4b942; border-color: #f4b942; }
+    .adv-btn:hover { filter: brightness(1.15); }
+    #adv-push-result.ok { color: #69d195; }
+    #adv-push-result.bad { color: #e85a5a; }
   `;
   const styleEl = document.createElement('style');
   styleEl.textContent = STYLES;
@@ -102,6 +121,30 @@
         </div>
         <div id="adv-qr-svg">Loading…</div>
         <div id="adv-qr-url"></div>
+
+        <h2 style="margin-top:24px">Backup to GitHub</h2>
+        <div class="muted" style="font-size:13px;margin-bottom:10px">
+          Pushes <code>data/sessions/&lt;id&gt;/{transcript,state,panels}</code> as
+          a single atomic commit. The repo's existing GH Action does the
+          journal generation + Hugo deploy.
+        </div>
+        <div class="adv-cfg-row">
+          <label for="adv-cfg-repo">Repo</label>
+          <input id="adv-cfg-repo" placeholder="owner/repo" autocomplete="off">
+        </div>
+        <div class="adv-cfg-row">
+          <label for="adv-cfg-branch">Branch</label>
+          <input id="adv-cfg-branch" placeholder="main" autocomplete="off">
+        </div>
+        <div class="adv-cfg-row">
+          <label for="adv-cfg-pat">PAT</label>
+          <input id="adv-cfg-pat" type="password" placeholder="(set — leave blank to keep)" autocomplete="off">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="adv-btn" id="adv-cfg-save">Save settings</button>
+          <button class="adv-btn primary" id="adv-do-push">⤴ Save session now</button>
+        </div>
+        <div id="adv-push-result" style="margin-top:10px;font-size:13px"></div>
       </div>
       <div>
         <h2>Players</h2>
@@ -165,10 +208,66 @@
         .filter(([_, c]) => !c.is_enemy)
         .map(([slug, c]) => ({ slug, name: c.name || slug }));
       renderPlayers();
+      // GitHub sync settings — load each open so we reflect any env-var-set state.
+      const cr = await fetch('/api/config');
+      const cfg = await cr.json();
+      $('adv-cfg-repo').value = cfg.repo || '';
+      $('adv-cfg-branch').value = cfg.branch || 'main';
+      $('adv-cfg-pat').placeholder = cfg.has_pat
+        ? '(set — leave blank to keep)'
+        : '(unset — paste a PAT)';
     } catch (e) {
       console.warn('refreshAll failed', e);
     }
   }
+
+  // Settings save
+  document.addEventListener('click', async (e) => {
+    if (e.target && e.target.id === 'adv-cfg-save') {
+      const body = {
+        repo:   $('adv-cfg-repo').value.trim(),
+        branch: $('adv-cfg-branch').value.trim() || 'main',
+      };
+      const pat = $('adv-cfg-pat').value;
+      if (pat) body.pat = pat;
+      const r = await fetch('/api/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      });
+      const result = $('adv-push-result');
+      if (r.ok) {
+        $('adv-cfg-pat').value = '';
+        result.className = 'ok';
+        result.textContent = 'Saved.';
+        // Refresh has_pat indicator
+        refreshAll();
+      } else {
+        result.className = 'bad';
+        result.textContent = 'Failed: ' + await r.text();
+      }
+    }
+    if (e.target && e.target.id === 'adv-do-push') {
+      const result = $('adv-push-result');
+      result.className = '';
+      result.textContent = 'Pushing…';
+      const r = await fetch('/api/session/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({}),
+      });
+      const body = await r.json();
+      if (r.ok && body.ok) {
+        result.className = 'ok';
+        result.innerHTML =
+          `Saved → <a href="${body.commit_url}" target="_blank" rel="noreferrer" style="color:inherit">` +
+          `${body.commit_sha.slice(0,7)}</a> (${body.files} files)`;
+      } else {
+        result.className = 'bad';
+        result.textContent = 'Failed: ' + (body.error || 'unknown');
+      }
+    }
+  });
 
   function renderPlayers() {
     const list = $('adv-players-list');
