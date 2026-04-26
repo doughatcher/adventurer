@@ -21,7 +21,18 @@ pub struct TranscribeMetrics {
 pub struct SttEngine {
     ctx: WhisperContext,
     threads: i32,
+    initial_prompt: Option<String>,
 }
+
+/// A baseline prompt that biases whisper toward fantasy/RPG vocabulary —
+/// names, action verbs, dice mechanics. Without it, narration like
+/// "Spock shoots the alien for 3 damage" tends to get reduced to
+/// `[BLANK_AUDIO]` or replaced with hallucinated boilerplate.
+pub const DEFAULT_DND_PROMPT: &str = "Audio from a tabletop role-playing game session. \
+Players narrate their characters' actions and the dungeon master describes scenes, \
+monsters, NPCs, and combat. Common terms include attack, damage, rolls, hit points, \
+initiative, spell, save, ability check, dexterity, strength. Character names like \
+Granit, Rides the Wake, Vargr, Spock, Lyvriele appear frequently.";
 
 impl SttEngine {
     pub fn load(model_path: &Path) -> Result<Self> {
@@ -41,11 +52,18 @@ impl SttEngine {
         Ok(Self {
             ctx,
             threads: default_threads(),
+            initial_prompt: Some(DEFAULT_DND_PROMPT.to_string()),
         })
     }
 
     pub fn with_threads(mut self, threads: i32) -> Self {
         self.threads = threads;
+        self
+    }
+
+    /// Override the default initial prompt. `None` disables the bias.
+    pub fn with_initial_prompt(mut self, prompt: Option<String>) -> Self {
+        self.initial_prompt = prompt;
         self
     }
 
@@ -62,6 +80,14 @@ impl SttEngine {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        // Bias Whisper toward D&D narration vocabulary so it doesn't replace
+        // real game speech with `[BLANK_AUDIO]` or YouTube-style hallucinations.
+        if let Some(p) = self.initial_prompt.as_deref() {
+            params.set_initial_prompt(p);
+        }
+        // Suppress non-speech token outputs ([silence], [music], etc.).
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);     // suppress non-speech tokens
 
         let t = Instant::now();
         state.full(params, pcm).context("whisper full() decode")?;

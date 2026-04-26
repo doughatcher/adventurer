@@ -30,7 +30,17 @@ pub fn detect_lan_ip() -> IpAddr {
     }
 }
 
+/// Build the URL the QR code encodes. If `ADVENTURER_PUBLIC_URL` is set
+/// (e.g. `https://adventurer.superterran.net`) it's used verbatim with `/join`
+/// appended — useful when the server is fronted by a Cloudflare Tunnel /
+/// reverse proxy that provides HTTPS (which iPad Safari and others require
+/// for `getUserMedia()` / mic access). Otherwise we fall back to the
+/// detected LAN IP + port.
 pub fn join_url(ip: IpAddr, port: u16) -> String {
+    if let Ok(public) = std::env::var("ADVENTURER_PUBLIC_URL") {
+        let trimmed = public.trim_end_matches('/');
+        return format!("{trimmed}/join");
+    }
     format!("http://{ip}:{port}/join")
 }
 

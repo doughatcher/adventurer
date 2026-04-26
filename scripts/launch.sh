@@ -36,14 +36,17 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] adventurer-launch starting (pid $$)"
 echo "  USER=${USER:-?}  HOME=${HOME:-?}  PWD=$(pwd)"
 echo "  PATH=$PATH"
 
-# Source ~/.env so credentials carried in there reach the container.
-if [[ -f "${HOME}/.env" ]]; then
-    set -a
-    # shellcheck disable=SC1091
-    source "${HOME}/.env" || echo "WARN: ~/.env source failed"
-    set +a
-    echo "  sourced ~/.env"
-fi
+# Source credential / config env files. Repo .env wins over ~/.env so a
+# project-specific override beats global defaults.
+for envfile in "${HOME}/.env" "${HOME}/repos/adventurer/.env"; do
+    if [[ -f "$envfile" ]]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "$envfile" || echo "WARN: $envfile source failed"
+        set +a
+        echo "  sourced $envfile"
+    fi
+done
 
 # Sanity-check critical commands. Bail loudly with the docker install
 # command if missing, so the log is self-explanatory.
@@ -82,6 +85,13 @@ if [[ -z "$LAN_IP" ]] && command -v ip >/dev/null; then
 fi
 LAN_IP="${LAN_IP:-127.0.0.1}"
 echo "  LAN_IP=$LAN_IP  PORT=$PORT  IMAGE=$IMAGE  SESSION=$SESSION"
+
+# Public URL the QR code encodes. iPad Safari refuses getUserMedia() over plain
+# HTTP (LAN), so we point the QR at the Cloudflare-Tunnel-fronted HTTPS hostname
+# when one's available. Default matches the tunnel rule we provisioned —
+# override via ADVENTURER_PUBLIC_URL=… or unset to fall back to the LAN URL.
+PUBLIC_URL="${ADVENTURER_PUBLIC_URL:-https://adventurer.superterran.net}"
+echo "  PUBLIC_URL=$PUBLIC_URL"
 
 cleanup() {
     echo "[$(date '+%H:%M:%S')] cleanup: SIGKILL container + kill Chrome window"
@@ -123,13 +133,31 @@ echo "  github env flags: ${#GH_ENV_FLAGS[@]} entries"
 # ─── 3. start the container ───
 # Run server inside the container on the SAME port we expose, so the QR-encoded
 # URL (which uses the server's --port) matches what's reachable from the LAN.
+# DEV MODE: ADVENTURER_DEV=1 mounts the host's assets dir into the container
+# at /work/dev-assets and points the server at it. UI changes (HTML/CSS/JS)
+# show up on a browser reload — no docker rebuild needed. Only Rust changes
+# require a rebuild.
+DEV_FLAGS=()
+if [[ "${ADVENTURER_DEV:-0}" == "1" ]]; then
+    DEV_ASSETS_HOST="${ADVENTURER_DEV_ASSETS_HOST:-/var/home/me/repos/adventurer/crates/server/assets}"
+    if [[ -d "$DEV_ASSETS_HOST" ]]; then
+        DEV_FLAGS+=(-v "${DEV_ASSETS_HOST}:/work/dev-assets:ro"
+                    -e "ADVENTURER_DEV_ASSETS=/work/dev-assets")
+        echo "  DEV mode: live-reloading assets from ${DEV_ASSETS_HOST}"
+    else
+        echo "  DEV mode requested but ${DEV_ASSETS_HOST} not found — skipping"
+    fi
+fi
+
 echo "[$(date '+%H:%M:%S')] docker run ${IMAGE} (port ${PORT})"
 CONTAINER_ID=$(docker run -d --name "${NAME}" \
     --device nvidia.com/gpu=all \
     -p "${PORT}:${PORT}" \
     -e "PORT=${PORT}" \
     -e "ADVENTURER_LAN_IP=${LAN_IP}" \
+    -e "ADVENTURER_PUBLIC_URL=${PUBLIC_URL}" \
     "${GH_ENV_FLAGS[@]}" \
+    "${DEV_FLAGS[@]}" \
     -v "${MODELS}:/models:ro" \
     -v "${SESSION}:/work/session" \
     "${IMAGE}" 2>&1)
@@ -156,6 +184,20 @@ for i in $(seq 1 120); do
 done
 
 URL="http://127.0.0.1:${PORT}/"
+
+# Headless mode: skip the browser launch and just block on the container.
+# Useful for remote/SSH starts ("just bring the server up, I'll point at it
+# from a real browser somewhere else") or for CI smoke tests. Set
+# ADVENTURER_HEADLESS=1 to enable.
+if [[ "${ADVENTURER_HEADLESS:-0}" == "1" ]]; then
+    echo "[$(date '+%H:%M:%S')] HEADLESS mode — no browser, server is at ${URL}"
+    echo "[$(date '+%H:%M:%S')] (or via tunnel: ${PUBLIC_URL})"
+    echo "[$(date '+%H:%M:%S')] waiting on container; SIGTERM/Ctrl-C to stop"
+    docker wait "${NAME}" >/dev/null 2>&1 || true
+    echo "[$(date '+%H:%M:%S')] container exited; launcher done"
+    exit 0
+fi
+
 echo "[$(date '+%H:%M:%S')] opening browser → ${URL}"
 
 # ─── 5. open browser fullscreen ───

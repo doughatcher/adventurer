@@ -59,6 +59,182 @@
   status.textContent = '🎮 controller';
   document.body.appendChild(status);
 
+  // ─── input debug overlay ───
+  // Bottom-right diagnostic showing the last key/mouse/pad event. Hidden by
+  // default — toggle with the discreet 🔍 chip OR the backtick (`) key OR
+  // visit the page with ?debug=1. Server-side input logging keeps running
+  // either way, so the panel is purely for live local visibility.
+  const debugStyle = document.createElement('style');
+  debugStyle.textContent = `
+    #adv-input-debug {
+      position: fixed; bottom: 8px; right: 8px;
+      z-index: 9600;
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: #d6deea; background: rgba(14,17,22,.92);
+      border: 1px solid #2a313c; border-radius: 6px;
+      padding: 6px 10px; min-width: 240px;
+      pointer-events: none;
+      display: none;
+    }
+    #adv-input-debug.show { display: block; }
+    #adv-input-debug .label { color: #5b6470; }
+    #adv-input-debug .value { color: #f4b942; }
+    #adv-input-debug .stale { color: #5b6470; }
+    #adv-input-debug .row { display: flex; justify-content: space-between; gap: 8px; }
+    #adv-debug-toggle {
+      position: fixed; bottom: 6px; right: 6px;
+      z-index: 9601;
+      width: 28px; height: 28px;
+      border-radius: 999px;
+      background: rgba(14,17,22,.5);
+      border: 1px solid rgba(42,49,60,.6);
+      color: #5b6470;
+      font-size: 13px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+      opacity: .35;
+      transition: opacity .15s, color .15s;
+      user-select: none;
+    }
+    #adv-debug-toggle:hover { opacity: 1; color: #d6deea; }
+    #adv-debug-toggle.active { color: #f4b942; opacity: .9; }
+    #adv-input-debug.show ~ #adv-debug-toggle,
+    #adv-debug-toggle.shifted { bottom: auto; top: 6px; right: 6px; }
+  `;
+  document.head.appendChild(debugStyle);
+  const dbg = document.createElement('div');
+  dbg.id = 'adv-input-debug';
+  dbg.innerHTML = `
+    <div class="row"><span class="label">key:</span>     <span id="adv-dbg-key" class="value">—</span></div>
+    <div class="row"><span class="label">mouse:</span>   <span id="adv-dbg-mouse" class="value">—</span></div>
+    <div class="row"><span class="label">pads:</span>    <span id="adv-dbg-pads" class="value">0</span></div>
+    <div class="row"><span class="label">last btn:</span><span id="adv-dbg-pad" class="value">—</span></div>
+    <div id="adv-dbg-hint" style="margin-top:6px;font-size:10px;color:#69d195;display:none">
+      Click anywhere or press a key first — Chrome locks the Gamepad API until then.
+    </div>
+  `;
+  document.body.appendChild(dbg);
+
+  // Toggle button + keyboard shortcut + ?debug=1 URL param.
+  const toggle = document.createElement('div');
+  toggle.id = 'adv-debug-toggle';
+  toggle.textContent = '🔍';
+  toggle.title = 'Toggle input debug (` key)';
+  document.body.appendChild(toggle);
+  function setDebugVisible(v) {
+    dbg.classList.toggle('show', v);
+    toggle.classList.toggle('active', v);
+    toggle.classList.toggle('shifted', v);
+  }
+  toggle.addEventListener('click', () => setDebugVisible(!dbg.classList.contains('show')));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '`' && !isTypingTarget(e.target)) {
+      e.preventDefault();
+      setDebugVisible(!dbg.classList.contains('show'));
+    }
+  });
+  if (new URLSearchParams(location.search).get('debug') === '1') {
+    setDebugVisible(true);
+  }
+
+  function dbgSet(elId, txt) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = txt;
+    el.className = 'value';
+    setTimeout(() => { if (el.textContent === txt) el.className = 'stale'; }, 2000);
+  }
+  function dbgSetPersistent(elId, txt) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = txt;
+    el.className = 'value';
+  }
+  // ─── server-side log mirror ───
+  // The dev (me) needs to see what reaches the page without reading it off
+  // a TV. Every interesting event also POSTs to /api/debug/input — the
+  // server logs it via tracing so `docker logs adventurer-live` shows the
+  // full picture. Fire-and-forget: a fetch with keepalive so we don't block.
+  function logToServer(payload) {
+    try {
+      fetch('/api/debug/input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+  }
+  // Throttle mouse moves to once per 250 ms so we don't spam.
+  let lastMouseLog = 0;
+
+  document.addEventListener('keydown', (e) => {
+    dbgSet('adv-dbg-key', `${e.key} (${e.code})`);
+    logToServer({ type: 'key', key: e.key, code: e.code, alt: e.altKey, ctrl: e.ctrlKey, shift: e.shiftKey });
+  }, true);
+  document.addEventListener('mousedown', (e) => {
+    dbgSet('adv-dbg-mouse', `click @ ${e.clientX},${e.clientY}`);
+    logToServer({ type: 'mouse_click', button: e.button, x: e.clientX, y: e.clientY });
+  }, true);
+  document.addEventListener('mousemove', (e) => {
+    dbgSet('adv-dbg-mouse', `move @ ${e.clientX},${e.clientY}`);
+    const now = performance.now();
+    if (now - lastMouseLog > 250) {
+      lastMouseLog = now;
+      logToServer({ type: 'mouse_move', x: e.clientX, y: e.clientY });
+    }
+  }, { passive: true, capture: true });
+
+  // One-shot startup banner so we know what page this is.
+  logToServer({
+    type: 'page_loaded',
+    href: location.href,
+    ua: navigator.userAgent,
+    ratio: window.devicePixelRatio,
+    pads_at_load: (navigator.getGamepads ? navigator.getGamepads().filter(p => p).length : 0),
+  });
+
+  // Live gamepad device count, regardless of button activity. Updates every
+  // frame so we can tell whether Chrome sees the device at all.
+  let lastPadCount = -1;
+  let userGestured = false;
+  function recordGesture() {
+    if (!userGestured) {
+      userGestured = true;
+      const hint = document.getElementById('adv-dbg-hint');
+      if (hint) hint.style.display = 'none';
+    }
+  }
+  document.addEventListener('click', recordGesture, true);
+  document.addEventListener('keydown', recordGesture, true);
+  function watchPadCount() {
+    const pads = (navigator.getGamepads ? navigator.getGamepads() : []) || [];
+    const real = Array.from(pads).filter(p => p);
+    if (real.length !== lastPadCount) {
+      lastPadCount = real.length;
+      if (real.length === 0) {
+        dbgSetPersistent('adv-dbg-pads', userGestured ? '0 (none detected)' : '0 (waiting for gesture)');
+        const hint = document.getElementById('adv-dbg-hint');
+        if (hint && !userGestured) hint.style.display = '';
+      } else {
+        const ids = real.map(p => `${p.index}:${(p.id || '?').slice(0, 24)}`).join(', ');
+        dbgSetPersistent('adv-dbg-pads', `${real.length} → ${ids}`);
+      }
+      logToServer({
+        type: 'pad_count_change',
+        count: real.length,
+        gestured: userGestured,
+        pads: real.map(p => ({
+          idx: p.index, id: p.id, mapping: p.mapping,
+          buttons: p.buttons.length, axes: p.axes.length,
+          connected: p.connected,
+        })),
+      });
+    }
+    requestAnimationFrame(watchPadCount);
+  }
+  requestAnimationFrame(watchPadCount);
+
   // ─── focus management ───
   let focusEl = null;
   function setFocus(el) {
@@ -84,8 +260,46 @@
     'a[href]:not([hidden]),' +
     '[tabindex]:not([tabindex="-1"])';
 
+  // Modal trap: when an overlay/modal is on screen, focus must stay inside
+  // it. The dnd-stage UI uses a few naming conventions for full-screen
+  // overlays — start-overlay, *-overlay, *-modal. We look for the topmost
+  // visible one and restrict focus to its descendants. Without this, arrow
+  // keys cycle through hidden buttons behind the overlay (e.g. header buttons
+  // when the start screen is up).
+  const MODAL_SELECTOR = [
+    '#start-overlay',
+    '#char-select-overlay',
+    '#map-modal-overlay',
+    '#modal-overlay',
+    '#history-overlay',
+    '#decision-overlay',
+    '#panel-detail-overlay',
+    '#end-session-overlay',
+    '#adv-qr-overlay',
+  ].join(',');
+
+  function isVisible(el) {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  function activeModal() {
+    const candidates = Array.from(document.querySelectorAll(MODAL_SELECTOR));
+    // Among visible ones pick the highest z-index (topmost).
+    let best = null, bestZ = -Infinity;
+    for (const el of candidates) {
+      if (!isVisible(el)) continue;
+      const z = parseInt(getComputedStyle(el).zIndex, 10) || 0;
+      if (z >= bestZ) { best = el; bestZ = z; }
+    }
+    return best;
+  }
+
   function visibleFocusables() {
-    return Array.from(document.querySelectorAll(FOCUS_SEL))
+    const root = activeModal() || document.body;
+    return Array.from(root.querySelectorAll(FOCUS_SEL))
       .filter(el => {
         const r = el.getBoundingClientRect();
         if (r.width === 0 || r.height === 0) return false;
@@ -112,6 +326,32 @@
     document.body.classList.remove('adv-gp-active');
     clearFocus();
   });
+
+  // Auto-focus the first button when an overlay/modal appears — so a single
+  // press of A (= Space in Steam KB+M) works without having to D-pad first.
+  // We poll the active modal each frame; when it changes, retarget focus.
+  let lastActiveModalId = '';
+  function watchModalForAutoFocus() {
+    const modal = activeModal();
+    const id = modal ? modal.id : '';
+    if (id !== lastActiveModalId) {
+      lastActiveModalId = id;
+      if (modal) {
+        const items = visibleFocusables();
+        if (items.length) {
+          // Brief delay so DOM has settled (animations etc.).
+          setTimeout(() => {
+            const fresh = visibleFocusables();
+            if (fresh.length) setFocus(fresh[0]);
+          }, 50);
+        }
+      } else {
+        clearFocus();
+      }
+    }
+    requestAnimationFrame(watchModalForAutoFocus);
+  }
+  requestAnimationFrame(watchModalForAutoFocus);
 
   // ─── gamepad poll loop ───
   // Standard W3C button indices.
@@ -189,6 +429,27 @@
         }
       }
 
+      // ─── debug: any button transition → display + log ───
+      for (let i = 0; i < buttons.length; i++) {
+        if (buttons[i] && !prevButtons[i]) {
+          dbgSet('adv-dbg-pad', `b${i} (${gp.id || 'gamepad'})`);
+          logToServer({
+            type: 'pad_button',
+            pad_id: gp.id,
+            pad_index: gp.index,
+            button: i,
+          });
+        }
+      }
+      // Stick deflection logged once per significant transition.
+      const lx = ax[0] || 0, ly = ax[1] || 0;
+      if (Math.abs(lx) > STICK_THRESHOLD && !(Math.abs(prevAxes.lx) > STICK_THRESHOLD)) {
+        logToServer({ type: 'pad_axis', axis: 'lx', value: lx });
+      }
+      if (Math.abs(ly) > STICK_THRESHOLD && !(Math.abs(prevAxes.ly) > STICK_THRESHOLD)) {
+        logToServer({ type: 'pad_axis', axis: 'ly', value: ly });
+      }
+
       // ─── face buttons ───
       if (pressed(B.A, buttons)) clickFocused();
       if (pressed(B.B, buttons)) closeModal();
@@ -205,8 +466,7 @@
       if (pressed(B.LEFT,  buttons) || pressed(B.UP,    buttons)) step(-1);
       if (pressed(B.RIGHT, buttons) || pressed(B.DOWN,  buttons)) step(+1);
 
-      // ─── left stick (debounced repeat at 200ms) ───
-      const lx = ax[0] || 0, ly = ax[1] || 0;
+      // ─── left stick (debounced repeat at 200ms) — lx/ly already declared above ───
       const now = performance.now();
       const wantPrev = lx < -STICK_THRESHOLD || ly < -STICK_THRESHOLD;
       const wantNext = lx >  STICK_THRESHOLD || ly >  STICK_THRESHOLD;
@@ -259,34 +519,43 @@
   }
 
   document.addEventListener('keydown', (e) => {
-    // While the controller is "active" we add the body class so the focus
-    // ring is visible. Any meaningful key press counts.
-    const navKeys = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter','Tab'];
-    if (navKeys.includes(e.key)) {
+    // Steam's "Keyboard and Mouse" desktop template sends WASD for D-pad /
+    // left stick and Space for the A button — not arrow keys / Enter as I
+    // initially expected. Support both so we cover both templates.
+    const k = e.key;
+    const navKeys = new Set([
+      'ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Enter','Tab',
+      'w','a','s','d','W','A','S','D',' ',
+    ]);
+    if (navKeys.has(k)) {
       document.body.classList.add('adv-gp-active');
       status.classList.add('show');
       status.textContent = '⌨ controller (via Steam Input)';
     }
 
-    // If the user is typing in an input, only intercept Tab (which is native
-    // anyway). Arrow keys belong to the cursor.
+    // If the user is typing in an input, only intercept Tab (native anyway).
+    // Arrow keys / WASD / Space belong to the cursor + text.
     if (isTypingTarget(e.target)) return;
 
-    switch (e.key) {
+    switch (k) {
       case 'ArrowDown':
       case 'ArrowRight':
+      case 's': case 'S':
+      case 'd': case 'D':
         e.preventDefault();
         step(+1);
         break;
       case 'ArrowUp':
       case 'ArrowLeft':
+      case 'w': case 'W':
+      case 'a': case 'A':
         e.preventDefault();
         step(-1);
         break;
       case 'Enter':
-        // If a button is gamepad-focused, click it. (Native Enter on a button
-        // already triggers click, but we want the same flow for divs/inputs.)
-        if (focusEl && focusEl.tagName !== 'BUTTON') {
+      case ' ':              // Space — Steam KB+M sends this for A button
+        // If a button is gamepad-focused, click it.
+        if (focusEl) {
           e.preventDefault();
           clickFocused();
         }

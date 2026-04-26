@@ -16,6 +16,14 @@
   <span id="hdr-status" class="connecting">Connecting…</span>
 </header>
 
+<!-- Mic-as-source: tap-to-record. Sends 5s chunks to /api/voice. -->
+<button id="rec-btn" type="button">
+  <span class="rec-dot" aria-hidden="true"></span>
+  <span id="rec-label">Tap to talk</span>
+  <span id="rec-secs"></span>
+</button>
+<div id="rec-error" class="hidden"></div>
+
 <main id="stage">
 
   <section id="me" class="card">

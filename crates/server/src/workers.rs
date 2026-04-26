@@ -241,9 +241,32 @@ impl SttWorker {
         Ok(Self { inner })
     }
 
-    /// Spool audio bytes to a tempfile and hand the path to the worker. The
-    /// worker reads + deletes the file. Avoids putting half-MB base64 payloads
-    /// through stdin pipes (which choke on lines that big).
+    /// Hand the worker a path on disk that the SERVER already wrote and
+    /// owns. The worker reads but does NOT delete — caller is responsible
+    /// for archive/cleanup policy. Used by /api/voice for never-delete
+    /// audio archiving.
+    pub async fn transcribe_path(
+        &self,
+        audio_path: &std::path::Path,
+        format: &str,
+        language: &str,
+    ) -> Result<TranscribeResp> {
+        let v = self
+            .inner
+            .request(serde_json::json!({
+                "type": "transcribe",
+                "audio_path": audio_path.display().to_string(),
+                "format": format,
+                "language": language,
+                "delete_after": false,
+            }))
+            .await?;
+        Ok(serde_json::from_value(v)?)
+    }
+
+    /// Legacy path: server writes a tempfile and asks the worker to delete it
+    /// after reading. Kept for STT-bench / standalone use; the live server
+    /// uses `transcribe_path` for never-delete archiving.
     pub async fn transcribe(&self, audio: &[u8], format: &str, language: &str) -> Result<TranscribeResp> {
         let ext = match format {
             "webm" => "webm",

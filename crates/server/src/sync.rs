@@ -45,6 +45,15 @@ pub struct PushResult {
 
 const UA: &str = concat!("adventurer/", env!("CARGO_PKG_VERSION"));
 
+/// What we can pull back from a previously-saved session in the content repo.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadedSession {
+    pub id: String,
+    pub transcript: String,
+    pub state: serde_json::Value,
+    pub panels: std::collections::BTreeMap<String, String>,
+}
+
 impl GitHubBackend {
     fn client(&self) -> Result<reqwest::Client> {
         let mut headers = reqwest::header::HeaderMap::new();
@@ -195,6 +204,76 @@ impl GitHubBackend {
             return Err(anyhow!("PATCH {url} → {status}: {text}"));
         }
         Ok(())
+    }
+
+    // ─── reading: list + load past sessions from data/sessions/ ───
+
+    /// List every session folder under `data/sessions/`. Returns IDs sorted
+    /// newest-first (assumes the `YYYY-MM-DD-HHMM` naming convention used by
+    /// dnd-stage and by our own `/api/session/save`).
+    pub async fn list_sessions(&self) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Entry { name: String, #[serde(rename = "type")] kind: String }
+        let client = self.client()?;
+        let url = self.url("contents/data/sessions");
+        let entries: Vec<Entry> = api_json(client.get(&url)).await
+            .with_context(|| format!("GET {url}"))?;
+        let mut ids: Vec<String> = entries.into_iter()
+            .filter(|e| e.kind == "dir")
+            .map(|e| e.name)
+            .collect();
+        ids.sort_by(|a, b| b.cmp(a));   // newest first
+        Ok(ids)
+    }
+
+    /// Pull `data/sessions/<id>/{transcript.md, state.json, *.md}` into a
+    /// `LoadedSession`. Files that don't exist in the repo are skipped (the
+    /// session may pre-date a particular panel).
+    pub async fn load_session(&self, id: &str) -> Result<LoadedSession> {
+        #[derive(Deserialize)]
+        struct ContentsEntry { name: String, #[serde(rename = "type")] kind: String }
+        let client = self.client()?;
+        let dir_url = self.url(&format!("contents/data/sessions/{id}"));
+        let files: Vec<ContentsEntry> = api_json(client.get(&dir_url)).await
+            .with_context(|| format!("GET {dir_url}"))?;
+
+        let mut transcript = String::new();
+        let mut state = serde_json::json!({});
+        let mut panels = std::collections::BTreeMap::new();
+
+        for f in files.iter().filter(|f| f.kind == "file") {
+            let raw = self.fetch_file(&client, id, &f.name).await?;
+            match f.name.as_str() {
+                "transcript.md" => {
+                    transcript = String::from_utf8_lossy(&raw).into_owned();
+                }
+                "state.json" => {
+                    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                        state = v;
+                    }
+                }
+                name if name.ends_with(".md") => {
+                    let stem = name.trim_end_matches(".md");
+                    panels.insert(stem.to_string(), String::from_utf8_lossy(&raw).into_owned());
+                }
+                _ => {}
+            }
+        }
+
+        Ok(LoadedSession { id: id.to_string(), transcript, state, panels })
+    }
+
+    async fn fetch_file(&self, c: &reqwest::Client, session_id: &str, name: &str) -> Result<Vec<u8>> {
+        #[derive(Deserialize)]
+        struct R { content: String, encoding: String }
+        let url = self.url(&format!("contents/data/sessions/{session_id}/{name}"));
+        let r: R = api_json(c.get(&url)).await
+            .with_context(|| format!("GET {url}"))?;
+        if r.encoding != "base64" {
+            bail!("unexpected encoding {} for {url}", r.encoding);
+        }
+        let stripped: String = r.content.chars().filter(|c| !c.is_whitespace()).collect();
+        Ok(base64::engine::general_purpose::STANDARD.decode(stripped)?)
     }
 }
 

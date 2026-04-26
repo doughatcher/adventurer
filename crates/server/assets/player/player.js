@@ -249,4 +249,255 @@
   }).catch(() => {});
 
   connect();
+
+  // ─── mic capture (the iPad as the table mic) ───
+  // Streams 5-second chunks to /api/voice. The server pipes each chunk through
+  // STT and appends the result to the live transcript everyone sees.
+  //
+  // iOS / iPad Safari quirks worth knowing:
+  //   1. getUserMedia REQUIRES a secure context — HTTPS or localhost. Plain
+  //      HTTP over LAN throws NotAllowedError. We surface that explicitly so
+  //      the user knows it's a setup thing, not a "broken" thing.
+  //   2. Default MediaRecorder mimeType on iOS is `audio/mp4`, on
+  //      Chrome/Firefox it's `audio/webm`. Server's ffmpeg figures it out
+  //      from the file's container header so we just send what we get.
+  //   3. autoplay/touch-to-start: the first getUserMedia call MUST be inside
+  //      a user gesture (the tap handler).
+
+  const recBtn   = $('rec-btn');
+  const recLabel = $('rec-label');
+  const recSecs  = $('rec-secs');
+  const recError = $('rec-error');
+
+  let mediaStream   = null;
+  let isRecording   = false;
+  let recStarted    = 0;
+  let recTimer      = null;
+  let recMime       = '';
+  let inflight      = 0;
+  let chunksSeen    = 0;
+  let chunksUploaded = 0;
+  let chunksFailed   = 0;
+  // Whisper was trained on ~30s clips and accuracy drops sharply below ~10s.
+  // 5s was too short — game narration like "Spock shoots the alien for 3
+  // damage" was getting lost or replaced with hallucinated boilerplate. 10s
+  // gives whisper enough context to anchor on, at the cost of slightly
+  // more transcript latency.
+  const SLICE_MS    = 10000;
+
+  // Mirror mic-pipeline events to the server log so we can grep for them in
+  // `docker logs adventurer-live | grep input_debug` and diagnose without
+  // peering at iPad screen text.
+  function micLog(payload) {
+    try {
+      fetch('/api/debug/input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, source: 'player-mic' }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+  }
+
+  // Quick context check up-front. If we're plainly insecure on a non-localhost
+  // host, the mic will fail no matter what; pre-warn the user.
+  if (!window.isSecureContext &&
+      location.hostname !== 'localhost' &&
+      location.hostname !== '127.0.0.1') {
+    showMicError(
+      `<strong>This page is on plain HTTP.</strong> ` +
+      `iPad Safari and Chrome require a secure context (HTTPS) for microphone access. ` +
+      `Tap the button anyway and Safari will probably show a "no microphone" error — ` +
+      `then the DM needs to either expose adventurer over HTTPS (e.g. via Cloudflare ` +
+      `Tunnel) or accept a self-signed cert.`
+    );
+  }
+
+  recBtn.addEventListener('click', async () => {
+    if (isRecording) stopRecording();
+    else await startRecording();
+  });
+
+  // Stop+restart pattern: each chunk is its own short-lived MediaRecorder
+  // session that produces a COMPLETE webm/mp4 file (with proper container
+  // headers). MediaRecorder.start(timeslice) is unreliable on iOS Safari and
+  // some other browsers — only the first chunk gets headers; subsequent ones
+  // are raw codec data and ffmpeg/whisper can't decode them ([BLANK_AUDIO]
+  // for every chunk after the first). One getUserMedia call though — we
+  // reuse the underlying audio track across recorder cycles so there's no
+  // re-prompt and no audio gap.
+  async function startRecording() {
+    if (isRecording) return;
+    hideMicError();
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    } catch (e) {
+      console.warn('getUserMedia failed', e);
+      showMicError(formatGetUserMediaError(e));
+      micLog({ type: 'mic_getusermedia_fail', name: e && e.name, msg: String(e) });
+      return;
+    }
+    recMime = pickMime();
+    chunksSeen = chunksUploaded = chunksFailed = 0;
+    isRecording = true;
+    recStarted = Date.now();
+    setRecordingUI(true);
+    recTimer = setInterval(updateTimer, 250);
+    micLog({
+      type: 'mic_started',
+      pattern: 'stop_restart',
+      mime: recMime,
+      slice_ms: SLICE_MS,
+      tracks: mediaStream.getAudioTracks().map(t => ({
+        label: t.label, settings: t.getSettings(),
+      })),
+      ua: navigator.userAgent,
+    });
+    recordOneSlice();
+  }
+
+  function recordOneSlice() {
+    if (!isRecording || !mediaStream) return;
+    let recorder;
+    try {
+      recorder = recMime
+        ? new MediaRecorder(mediaStream, { mimeType: recMime })
+        : new MediaRecorder(mediaStream);
+    } catch (e) {
+      micLog({ type: 'mic_recorder_init_fail', err: String(e) });
+      stopRecording();
+      return;
+    }
+    let blob = null;
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) blob = e.data;
+    };
+    recorder.onerror = (e) => {
+      micLog({ type: 'mic_recorder_error', err: String(e && e.error || e) });
+    };
+    recorder.onstop = async () => {
+      if (blob) await onChunk({ data: blob });
+      if (isRecording) recordOneSlice();   // immediately start next slice
+    };
+    recorder.start();
+    // Stop after SLICE_MS — guarded against the recorder dying early.
+    setTimeout(() => {
+      try {
+        if (recorder.state === 'recording') recorder.stop();
+      } catch (e) {
+        micLog({ type: 'mic_stop_throw', err: String(e) });
+      }
+    }, SLICE_MS);
+  }
+
+  function stopRecording() {
+    if (!isRecording) return;
+    isRecording = false;
+    micLog({ type: 'mic_stopped',
+             chunks_seen: chunksSeen, uploaded: chunksUploaded, failed: chunksFailed });
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(t => t.stop());
+      mediaStream = null;
+    }
+    setRecordingUI(false);
+    clearInterval(recTimer); recTimer = null;
+    recSecs.textContent = '';
+  }
+
+  function setRecordingUI(rec) {
+    recBtn.classList.toggle('recording', rec);
+    recLabel.textContent = rec ? 'Recording — tap to stop' : 'Tap to talk';
+  }
+
+  function updateTimer() {
+    const s = Math.floor((Date.now() - recStarted) / 1000);
+    const mm = Math.floor(s / 60).toString();
+    const ss = (s % 60).toString().padStart(2, '0');
+    recSecs.textContent = `${mm}:${ss}` + (inflight > 0 ? '  ⤴' : '');
+  }
+
+  function pickMime() {
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',                  // Safari / iOS default
+      'audio/mp4;codecs=mp4a.40.2',
+    ];
+    for (const m of candidates) {
+      try { if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) return m; }
+      catch {}
+    }
+    return '';
+  }
+
+  async function onChunk(evt) {
+    chunksSeen++;
+    micLog({ type: 'mic_chunk', n: chunksSeen, bytes: evt.data ? evt.data.size : 0,
+             rec_state: mediaRecorder ? mediaRecorder.state : 'gone' });
+    if (!evt.data || !evt.data.size) return;
+    const ext = (recMime && recMime.includes('mp4')) ? 'm4a'
+              : (recMime && recMime.includes('ogg')) ? 'ogg' : 'webm';
+    const fd = new FormData();
+    fd.append('audio', evt.data, `chunk-${Date.now()}.${ext}`);
+    inflight++;
+    recBtn.classList.add('uploading');
+    try {
+      const resp = await fetch('/api/voice', { method: 'POST', body: fd });
+      if (resp.ok) {
+        chunksUploaded++;
+        micLog({ type: 'mic_upload_ok', n: chunksSeen });
+      } else {
+        chunksFailed++;
+        const txt = await resp.text();
+        console.warn('chunk upload failed', resp.status, txt);
+        micLog({ type: 'mic_upload_fail', n: chunksSeen, status: resp.status, body: txt.slice(0, 200) });
+      }
+    } catch (e) {
+      chunksFailed++;
+      console.warn('chunk upload network error', e);
+      micLog({ type: 'mic_upload_neterr', n: chunksSeen, err: String(e) });
+    } finally {
+      inflight--;
+      if (inflight === 0) recBtn.classList.remove('uploading');
+    }
+  }
+
+  function showMicError(html) {
+    recError.classList.remove('hidden');
+    recError.innerHTML = html;
+  }
+  function hideMicError() {
+    recError.classList.add('hidden');
+    recError.innerHTML = '';
+  }
+
+  function formatGetUserMediaError(e) {
+    const name = e && e.name || '';
+    const msg = e && (e.message || String(e)) || 'unknown';
+    if (name === 'NotAllowedError' || name === 'SecurityError') {
+      return `<strong>Microphone access blocked.</strong><br>` +
+             `(${name}: ${msg})<br><br>` +
+             `Most likely cause: this page is on plain HTTP. iPad Safari and ` +
+             `Chrome require HTTPS for the mic. Ask the DM to expose adventurer ` +
+             `over HTTPS, or visit via <code>localhost</code> from the host machine.`;
+    }
+    if (name === 'NotFoundError') {
+      return `<strong>No microphone detected on this device.</strong> ` +
+             `(${msg})`;
+    }
+    return `<strong>Could not start mic.</strong><br>(${name}: ${msg})`;
+  }
+
+  // Stop recording when the player tab goes away (background, page close).
+  window.addEventListener('beforeunload', stopRecording);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') stopRecording();
+  });
 })();

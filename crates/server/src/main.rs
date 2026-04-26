@@ -35,7 +35,8 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use tracing::info;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::{info, Level};
 
 use api::AppContext;
 use state::AppState;
@@ -166,6 +167,14 @@ async fn main() -> Result<()> {
     let lan_ip = lan::detect_lan_ip();
     let players = players::Players::new();
     let config_store = config::ConfigStore::load();
+
+    // Live-reload watcher: when ADVENTURER_DEV_ASSETS points at a host-mounted
+    // assets dir, watch it for changes. Each change broadcasts a DevReload
+    // event so any connected browser can reload itself.
+    if let Ok(dev_path) = std::env::var("ADVENTURER_DEV_ASSETS") {
+        let app_state_for_watch = app_state.clone();
+        std::thread::spawn(move || spawn_dev_asset_watcher(dev_path, app_state_for_watch));
+    }
     let cfg_snap = config_store.snapshot().await;
     info!(
         %lan_ip,
@@ -208,10 +217,23 @@ async fn main() -> Result<()> {
         .route("/api/players/announce", post(api::announce_player))
         .route("/api/players/:token/assign", post(api::assign_player_character))
         .route("/api/config", get(api::get_config).post(api::set_config))
-        .route("/api/session/save", post(api::save_session))
+        .route("/api/session/save",  post(api::save_session))
+        .route("/api/session",       get(api::get_session_info))
+        .route("/api/session/start", post(api::start_session))
+        .route("/api/session/mode",  post(api::set_session_mode))
+        .route("/api/session/load",  post(api::load_session))
+        .route("/api/adventure-log/sessions", get(api::list_adventure_log_sessions))
+        .route("/api/debug/input",   post(api::log_input_debug))
         .route("/ws", get(ws::ws_handler))
         .route("/static/*path", get(embed::static_file))
-        .with_state(ctx);
+        .with_state(ctx)
+        // Log every HTTP request — method + path + status + latency. Lets us
+        // see iPad-from-cloudflare hits + diagnose missing /api/voice POSTs.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        );
 
     let addr: SocketAddr = format!("{}:{}", args.host, args.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -263,6 +285,55 @@ async fn run_server_only_health(args: &Args) -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Watch the host-mounted assets dir and broadcast a DevReload event each
+/// time something changes. Runs on its own std::thread because notify is
+/// callback-based and we don't want it tangled with tokio's runtime. The
+/// callback hops back into tokio via the AppState's broadcast channel.
+fn spawn_dev_asset_watcher(path: String, app: state::AppState) {
+    use notify::{Config, PollWatcher, RecursiveMode, Watcher};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    info!(%path, "dev-assets watcher starting (poll mode)");
+    let last_fire = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(60)));
+    let app_for_cb = app.clone();
+    // PollWatcher (fs polling) is mandatory here: the assets dir is a docker
+    // bind-mount, and inotify events from the host do NOT propagate inside
+    // the container. RecommendedWatcher would silently install an inotify
+    // hook that never fires. Poll every 750ms — fast enough that an asset
+    // edit shows up by the time we tab back to the browser, slow enough to
+    // be invisible CPU-wise.
+    let cfg = Config::default()
+        .with_poll_interval(Duration::from_millis(750))
+        .with_compare_contents(false); // mtime is enough; cheaper.
+    let mut watcher: PollWatcher = match PollWatcher::new(
+        move |res: notify::Result<notify::Event>| {
+            if res.is_err() { return; }
+            // Debounce — file editors often fire several events per save
+            // (write, chmod, rename); collapse to one reload per ~500ms.
+            let mut last = last_fire.lock().unwrap();
+            let now = Instant::now();
+            if now.duration_since(*last) < Duration::from_millis(500) { return; }
+            *last = now;
+            tracing::info!("dev-asset change detected → broadcasting reload");
+            app_for_cb.broadcast(state::Event::DevReload {});
+        },
+        cfg,
+    ) {
+        Ok(w) => w,
+        Err(e) => { tracing::warn!(?e, "dev watcher init failed"); return; }
+    };
+    if let Err(e) = watcher.watch(std::path::Path::new(&path), RecursiveMode::Recursive) {
+        tracing::warn!(?e, "dev watcher watch() failed");
+        return;
+    }
+    info!(%path, "dev-assets watcher running");
+    // Keep `watcher` in scope (dropping it would unsubscribe from the OS
+    // notifications). Park forever; the parent process exit kills the thread.
+    let _keepalive = watcher;
+    loop { std::thread::park(); }
 }
 
 async fn shutdown_signal() {
