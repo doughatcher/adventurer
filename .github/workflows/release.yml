@@ -120,12 +120,13 @@ jobs:
           cl 2>&1 | Select-Object -First 1
         shell: pwsh
 
-      # macOS runners ship cmake + clang (Apple's vendored toolchain) so
-      # there's nothing to install. We just verify they're present so a
-      # silent runner-image change is loud rather than silent.
-      - name: confirm build deps (macos)
+      # macOS runners ship cmake + clang (Apple's vendored toolchain),
+      # but the STT worker links OpenMP explicitly. Install libomp so the
+      # Apple Silicon release build can find libomp.dylib.
+      - name: install build deps (macos)
         if: runner.os == 'macOS'
         run: |
+          brew install libomp
           cmake --version | head -1
           clang --version | head -1
           uname -m
